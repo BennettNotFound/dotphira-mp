@@ -214,7 +214,7 @@ public class Session
             {
                 return new ServerCommand.CreateRoom(Result<object?>.Failure("Room creation is currently disabled by the administrator."));
             }
-            
+
             if (_user == null)
                 return new ServerCommand.CreateRoom(Result<object?>.Failure("Not authenticated"));
 
@@ -240,6 +240,15 @@ public class Session
             //await room.SendMessageAsync(new Message.Chat(0, _welcomeMessage));
             await room.SendMessageAsync(new Message.Chat(0,$"[L]当前房间ID: {RoomId}"));
 
+            // WebSocket 通知
+            _ = Task.Run(async () => {
+                var wsService = _server.GetWebSocketService();
+                if (wsService != null)
+                {
+                    await wsService.SendRoomLogAsync(RoomId, $"{_user.Name} 创建了房间");
+                }
+            });
+
             return new ServerCommand.CreateRoom(Result<object?>.Success(null));
         }
         catch (Exception ex)
@@ -259,6 +268,7 @@ public class Session
                 return new ServerCommand.JoinRoom(Result<JoinRoomResponse>.Failure("Already in a room"));
 
             Room? room;
+            string joinedRoomId;
 
             // 房间ID为0时随机加入招募中的房间
             if (join.RoomId == "0")
@@ -273,6 +283,8 @@ public class Session
                 if (room == null)
                     return new ServerCommand.JoinRoom(Result<JoinRoomResponse>.Failure("Room not found"));
             }
+
+            joinedRoomId = room.Id;
 
             if (room.IsLocked)
                 return new ServerCommand.JoinRoom(Result<JoinRoomResponse>.Failure("Room is locked"));
@@ -298,6 +310,16 @@ public class Session
                 room.GetAllUsers().Select(u => u.ToInfo()).ToList(),
                 room.IsLive
             );
+
+            // WebSocket 通知
+            _ = Task.Run(async () => {
+                var wsService = _server.GetWebSocketService();
+                if (wsService != null)
+                {
+                    await wsService.SendRoomLogAsync(joinedRoomId, $"{_user.Name} 加入了房间");
+                    await wsService.SendRoomUpdateAsync(joinedRoomId);
+                }
+            });
 
             return new ServerCommand.JoinRoom(Result<JoinRoomResponse>.Success(response));
         }

@@ -30,10 +30,19 @@ builder.Services.AddSingleton<Microsoft.Extensions.Internal.ISystemClock, Micros
 builder.Services.AddSingleton<OtpService>();
 builder.Services.AddSingleton<IpBlacklistService>();
 builder.Services.AddSingleton<ReplayService>();
+builder.Services.AddSingleton<WebSocketService>();
 builder.Services.AddCors();
+
+builder.Services.AddSingleton<WebSocketService>();
 
 var app = builder.Build();
 var adminDataService = app.Services.GetRequiredService<AdminDataService>();
+var webSocketService = app.Services.GetRequiredService<WebSocketService>();
+var serverState = app.Services.GetRequiredService<ServerState>();
+
+// 设置 WebSocketService 到 ServerState（避免循环依赖）
+serverState.SetWebSocketService(webSocketService);
+
 adminDataService.Load();
 app.MapReplayApi();
 
@@ -84,6 +93,44 @@ if (config.HttpService)
     app.UseMiddleware<IpBlacklistMiddleware>();
     app.UseCors(p => p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
     app.UseMiddleware<AdminApiMiddleware>();
+
+    // WebSocket 端点 - 必须在静态文件中间件之前
+    app.UseWebSockets();
+    app.Map("/ws", async (HttpContext context, WebSocketService webSocketService, ILogger<Program> logger) =>
+    {
+        var headers = context.Request.Headers;
+        var isWsRequest = context.WebSockets.IsWebSocketRequest;
+
+        // 诊断日志
+        logger.LogInformation("/ws 请求详情: Method={Method}, IsWebSocketRequest={IsWs}, " +
+                           "Connection={Connection}, Upgrade={Upgrade}, Via={Via}, " +
+                           "Cf-Ray={CfRay}, Cf-Visitor={CfVisitor}",
+                           context.Request.Method,
+                           isWsRequest,
+                           headers.TryGetValue("Connection", out var connVal) ? connVal.ToString() : "null",
+                           headers.TryGetValue("Upgrade", out var upgradeVal) ? upgradeVal.ToString() : "null",
+                           headers.TryGetValue("Via", out var via) ? via.ToString() : "null",
+                           headers.TryGetValue("Cf-Ray", out var ray) ? ray.ToString() : "null",
+                           headers.TryGetValue("Cf-Visitor", out var visitor) ? visitor.ToString() : "null");
+
+        if (isWsRequest)
+        {
+            using var webSocket = await context.WebSockets.AcceptWebSocketAsync();
+            await webSocketService.HandleConnectionAsync(webSocket);
+        }
+        else
+        {
+            context.Response.StatusCode = StatusCodes.Status426UpgradeRequired;
+            await context.Response.WriteAsJsonAsync(new {
+                error = "WebSocket required",
+                message = "Cloudflare proxy may be interfering with WebSocket upgrade",
+                isWebSocketRequest = isWsRequest,
+                connectionHeader = headers.TryGetValue("Connection", out var connHeader) ? connHeader.ToString() : null,
+                upgradeHeader = headers.TryGetValue("Upgrade", out var upgradeHeader) ? upgradeHeader.ToString() : null
+            });
+        }
+    });
+
     app.UseDefaultFiles();
     app.UseStaticFiles();
 

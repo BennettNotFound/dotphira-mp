@@ -14,6 +14,7 @@ public class Room
     private readonly HashSet<int> _abortedUsers = new();
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly ServerState _serverState;
+    private readonly WebSocketService? _webSocketService;
 
     public string Id { get; }
     public User Host { get; private set; }
@@ -38,11 +39,12 @@ public class Room
     public HashSet<long> ContestWhitelist { get; } = new();
     // --- End Contest Mode Properties ---
 
-    public Room(string id, User host, ServerState serverState)
+    public Room(string id, User host, ServerState serverState, WebSocketService? webSocketService = null)
     {
         Id = id;
         Host = host;
         _serverState = serverState;
+        _webSocketService = webSocketService;
         _users.Add(host);
     }
 
@@ -107,6 +109,15 @@ public class Room
             }
 
             await CheckAllReadyAsync();
+
+            // WebSocket 通知
+            _ = Task.Run(async () => {
+                if (_webSocketService != null)
+                {
+                    await _webSocketService.SendRoomLogAsync(Id, $"{user.Name} 离开了房间");
+                    await _webSocketService.SendRoomUpdateAsync(Id);
+                }
+            });
         }
         finally
         {
@@ -184,6 +195,14 @@ public class Room
     public async Task OnStateChangeAsync()
     {
         await BroadcastAsync(new ServerCommand.ChangeState(State, SelectedChartId));
+
+        // WebSocket 通知
+        _ = Task.Run(async () => {
+            if (_webSocketService != null)
+            {
+                await _webSocketService.SendRoomUpdateAsync(Id);
+            }
+        });
     }
 
     public async Task StartGameAsync(User user)
@@ -198,6 +217,15 @@ public class Room
             await SendMessageAsync(new Message.GameStart(user.Id));
             await OnStateChangeAsync();
             await CheckAllReadyAsync();
+
+            // WebSocket 通知
+            _ = Task.Run(async () => {
+                if (_webSocketService != null)
+                {
+                    await _webSocketService.SendRoomLogAsync(Id, $"{user.Name} 开始了游戏");
+                    await _webSocketService.SendRoomUpdateAsync(Id);
+                }
+            });
         }
         finally
         {

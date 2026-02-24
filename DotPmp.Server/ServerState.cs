@@ -13,12 +13,18 @@ public class ServerState
     private readonly ConcurrentDictionary<Guid, Session> _sessions = new();
     private readonly ConcurrentDictionary<int, User> _users = new();
     private readonly ConcurrentDictionary<string, Room> _rooms = new();
+    private WebSocketService? _webSocketService;
 
     public ServerState(AdminDataService adminDataService)
     {
         _adminDataService = adminDataService;
         // 注册系统用户 "L"
         _users[0] = new User(0, "L");
+    }
+
+    public void SetWebSocketService(WebSocketService webSocketService)
+    {
+        _webSocketService = webSocketService;
     }
 
     public bool IsUserBanned(long userId) => _adminDataService.IsBanned(userId);
@@ -39,8 +45,17 @@ public class ServerState
 
     public async Task<Room> CreateRoomAsync(string roomId, User host)
     {
-        var room = new Room(roomId, host, this);
+        var room = new Room(roomId, host, this, _webSocketService);
         if (!_rooms.TryAdd(roomId, room)) throw new InvalidOperationException("Room already exists");
+
+        // WebSocket 通知
+        _ = Task.Run(async () => {
+            if (_webSocketService != null)
+            {
+                await _webSocketService.SendAdminUpdateAsync();
+            }
+        });
+
         return room;
     }
 
@@ -57,6 +72,14 @@ public class ServerState
             var users = room.GetAllUsers().ToList();
             await room.SendMessageAsync(new Message.Chat(0, $"房间已被管理员解散:{message}"));
             foreach (var u in users) if (u.Session != null) await u.Session.CloseAsync();
+
+            // WebSocket 通知
+            _ = Task.Run(async () => {
+                if (_webSocketService != null)
+                {
+                    await _webSocketService.SendAdminUpdateAsync();
+                }
+            });
         }
     }
 
@@ -89,4 +112,6 @@ public class ServerState
         var list = _rooms.Values.Where(r => r.IsRecruiting && !r.IsLocked && r.GetPlayerCount() < r.MaxPlayerCount).ToList();
         return list.Count == 0 ? null : list[new Random().Next(list.Count)];
     }
+
+    public WebSocketService? GetWebSocketService() => _webSocketService;
 }
