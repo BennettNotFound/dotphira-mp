@@ -111,19 +111,20 @@
             box-shadow: 0 10px 30px var(--theme-glow-strong, rgba(255,255,255,0.2));
         }
 
-        .room-card.state-SelectChart {
+        /* 统一改为全小写 */
+        .room-card.state-selectchart {
             border-color: var(--state-select);
             box-shadow: 0 0 15px rgba(0, 212, 255, 0.2);
             --theme-color: var(--state-select);
             --theme-glow-strong: rgba(0, 212, 255, 0.5);
         }
-        .room-card.state-WaitingForReady {
+        .room-card.state-waitingforready {
             border-color: var(--state-wait);
             box-shadow: 0 0 15px rgba(247, 184, 7, 0.2);
             --theme-color: var(--state-wait);
             --theme-glow-strong: rgba(247, 184, 7, 0.5);
         }
-        .room-card.state-Playing {
+        .room-card.state-playing {
             border-color: var(--state-play);
             box-shadow: 0 0 15px rgba(110, 212, 62, 0.2);
             --theme-color: var(--state-play);
@@ -320,7 +321,9 @@
 
         .refresh-btn:hover { transform: scale(1.1); }
         .refresh-btn.loading svg { animation: spin 1s linear infinite; }
+        .refresh-btn.loading { background: #00d4ff; }
         .refresh-btn svg { width: 24px; height: 24px; fill: var(--bg-dark); }
+        .refresh-btn.loading svg { fill: #fff; }
 
         @keyframes spin {
             from { transform: rotate(0deg); }
@@ -360,24 +363,21 @@
     <div class="rooms-grid" id="roomsGrid">
     </div>
 
-    <div class="last-update" id="lastUpdate"></div>
+    <div class="last-update" id="lastUpdate">
+    短按刷新WebSocket | 长按切换HTTP轮询
+</div>
 </div>
 
-<button class="refresh-btn" id="refreshBtn" onclick="loadData()">
+<button class="refresh-btn" id="refreshBtn">
     <svg viewBox="0 0 24 24">
         <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
     </svg>
 </button>
 
 <script>
-    const stateNames = {
-        'select_chart': '选曲中',
-        'waiting_for_ready': '准备中',
-        'playing': '游戏中',
-        'SelectChart': '选曲中',
-        'WaitingForReady': '准备中',
-        'Playing': '游戏中'
-    };
+
+    const stateNames = { 'selectchart': '选曲中', 'waitingforready': '准备中', 'playing': '游戏中' };
+    
 
     // 🌟 双重数据缓存区：谱面和用户头像
     const chartCache = {};
@@ -424,6 +424,9 @@
         console.log('当前页面 URL:', window.location.href);
         console.log('WebSocket URL:', (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host + '/ws');
 
+        // 清除初始提示
+        document.getElementById('lastUpdate').textContent = '';
+
         // 先测试 HTTP API 是否可用
         testHttpApi();
 
@@ -438,6 +441,13 @@
 
         console.log('尝试连接 WebSocket:', wsUrl);
         console.log('Admin Token:', adminToken);
+
+        // 清除现有的轮询和重连定时器
+        stopPolling();
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
 
         try {
             ws = new WebSocket(wsUrl);
@@ -527,6 +537,75 @@
         ws.send(message);
     }
 
+    // 重新连接 WebSocket
+    function reconnectWebSocket() {
+        console.log('重新连接 WebSocket...');
+        document.getElementById('lastUpdate').textContent = '🔄 重新连接中...';
+
+        // 关闭现有连接
+        if (ws) {
+            ws.close();
+        }
+
+        // 停止轮询
+        stopPolling();
+
+        // 重新连接
+        connectWebSocket();
+    }
+
+    // 刷新按钮事件处理
+    const refreshBtn = document.getElementById('refreshBtn');
+    let pressTimer = null;
+    let isLongPress = false;
+
+    // 鼠标/触摸按下
+    const handlePressStart = (e) => {
+        isLongPress = false;
+        refreshBtn.classList.add('loading');
+
+        // 设置长按定时器（800ms）
+        pressTimer = setTimeout(() => {
+            isLongPress = true;
+            console.log('长按检测到，切换到 HTTP 轮询模式');
+            refreshBtn.classList.remove('loading');
+            startPolling();
+        }, 800);
+    };
+
+    // 鼠标/触摸松开
+    const handlePressEnd = (e) => {
+        clearTimeout(pressTimer);
+        refreshBtn.classList.remove('loading');
+
+        // 如果不是长按，则是短按，重新连接 WebSocket
+        if (!isLongPress) {
+            console.log('短按检测到，重新连接 WebSocket');
+            reconnectWebSocket();
+        }
+
+        isLongPress = false;
+    };
+
+    // 鼠标事件
+    refreshBtn.addEventListener('mousedown', handlePressStart);
+    refreshBtn.addEventListener('mouseup', handlePressEnd);
+    refreshBtn.addEventListener('mouseleave', () => {
+        clearTimeout(pressTimer);
+        refreshBtn.classList.remove('loading');
+        isLongPress = false;
+    });
+
+    // 触摸事件
+    refreshBtn.addEventListener('touchstart', (e) => {
+        e.preventDefault(); // 防止触发鼠标事件
+        handlePressStart(e);
+    });
+    refreshBtn.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        handlePressEnd(e);
+    });
+
     // 处理 WebSocket 消息
     function handleWebSocketMessage(message) {
         switch (message.type) {
@@ -581,11 +660,19 @@
             isLive: room.live,
             isRecruiting: !room.locked,
             selectedChartId: room.chart?.id,
-            players: room.users?.map(u => ({
-                id: u.id,
-                name: u.name,
-                isMonitor: false
-            })) || []
+            // 合并 users 和 monitors 数组，并正确设置 isMonitor 属性
+            players: [
+                ...(room.users?.map(u => ({
+                    id: u.id,
+                    name: u.name,
+                    isMonitor: u.is_monitor || false
+                })) || []),
+                ...(room.monitors?.map(m => ({
+                    id: m.id,
+                    name: m.name,
+                    isMonitor: m.is_monitor !== undefined ? m.is_monitor : true
+                })) || [])
+            ]
         }));
 
         console.log('转换后的房间数据:', formattedRooms);
@@ -637,6 +724,19 @@
     // 轮询模式（作为 WebSocket 的后备）
     function startPolling() {
         console.log('使用HTTP轮询模式');
+
+        // 关闭 WebSocket 连接
+        if (ws) {
+            ws.close();
+            ws = null;
+        }
+
+        // 清除重连定时器
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+
         loadData();
         if (!window.pollingInterval) {
             window.pollingInterval = setInterval(loadData, 5000);
@@ -709,14 +809,15 @@
             const chartLevel = chartInfo ? `<span class="chart-level">${escapeHtml(chartInfo.level)} (定数 ${chartInfo.difficulty.toFixed(1)})</span>` : '';
 
             // 状态映射
-            const stateKey = room.state in stateNames ? room.state :
-                room.state.charAt(0).toUpperCase() + room.state.slice(1).replace(/_([a-z])/g, (m, c) => c.toUpperCase());
+            const rawState = (typeof room.state === 'object' ? room.state.type : room.state) || '';
+            const stateKey = rawState.toLowerCase().replace(/_/g, ''); // 移除下划线并转小写
+            const displayState = stateNames[stateKey] || rawState;
 
             return `
                 <div class="room-card state-${stateKey}" ${bgImgStyle}>
-                    <div class="card-top">
-                        <div class="room-id">${escapeHtml(room.id)}</div>
-                        <div class="room-state-text">${stateNames[stateKey] || room.state}</div>
+                <div class="card-top">
+                    <div class="room-id">${escapeHtml(room.id)}</div>
+                    <div class="room-state-text">${displayState}</div>
                     </div>
 
                     <div class="card-body">

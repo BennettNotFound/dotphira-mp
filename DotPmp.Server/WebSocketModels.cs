@@ -156,7 +156,8 @@ public record WebSocketAdminUserInfo(
     [property: JsonPropertyName("language")] string? Language,
     [property: JsonPropertyName("finished")] bool Finished,
     [property: JsonPropertyName("aborted")] bool Aborted,
-    [property: JsonPropertyName("record_id")] int? RecordId
+    [property: JsonPropertyName("record_id")] int? RecordId,
+    [property: JsonPropertyName("is_monitor")] bool IsMonitor
 );
 
 public record WebSocketAdminRoomInfo(
@@ -187,6 +188,6 @@ public record WebSocketAdminChangesData(
 );
 
 public record WebSocketAdminUpdateMessage(
-    [property: JsonPropertyName("type")] string Type = WsMessageType.AdminUpdate,
-    [property: JsonPropertyName("data")] WebSocketAdminUpdateData? Data = null
+    [property: JsonPropertyName("type")] string Type,
+    [property: JsonPropertyName("data")] WebSocketAdminUpdateData Data
 ) : IWebSocketMessage;

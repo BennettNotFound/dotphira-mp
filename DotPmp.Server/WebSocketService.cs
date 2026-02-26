@@ -43,7 +43,7 @@ public class WebSocketService
         _jsonOptions = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never
         };
     }
 
@@ -349,7 +349,9 @@ public class WebSocketService
         }
     }
 
-    private async Task SendMessageAsync(WebSocketClient client, IWebSocketMessage message)
+    // 1. 将参数类型从 IWebSocketMessage 改为 T
+    // 2. 添加泛型约束 where T : IWebSocketMessage
+    private async Task SendMessageAsync<T>(WebSocketClient client, T message) where T : IWebSocketMessage
     {
         try
         {
@@ -359,8 +361,11 @@ public class WebSocketService
                 return;
             }
 
+            // 使用泛型后，JsonSerializer 会根据 T 的实际类型（如 WebSocketAdminUpdateMessage）进行序列化
+            // 这样 Data 字段就不会因为接口定义的限制而被丢弃了
             var json = JsonSerializer.Serialize(message, _jsonOptions);
-            _logger.LogInformation($"发送消息到客户端 {client.Id}: {json.Substring(0, Math.Min(200, json.Length))}...");
+        
+            _logger.LogInformation($"发送消息到客户端 {client.Id} (类型: {typeof(T).Name}): {json}");
 
             var buffer = Encoding.UTF8.GetBytes(json);
 
@@ -400,9 +405,12 @@ public class WebSocketService
             Users: room.GetPlayers().Select(u => new WebSocketRoomUserInfo(
                 Id: u.Id,
                 Name: u.Name,
-                IsReady: false // TODO: 获取实际准备状态
+                IsReady: room.IsUserReady(u)
             )).ToList(),
-            Monitors: new List<WebSocketRoomMonitorInfo>() // TODO: 获取观察者列表
+            Monitors: room.GetMonitors().Select(m => new WebSocketRoomMonitorInfo(
+                Id: m.Id,
+                Name: m.Name
+            )).ToList()
         );
 
         var message = new WebSocketRoomUpdateMessage(Data: roomData);
@@ -492,9 +500,21 @@ public class WebSocketService
                 Language: null,
                 Finished: r.IsPlayerFinished(u.Id),
                 Aborted: r.IsPlayerAborted(u.Id),
-                RecordId: r.GetPlayerRecordId(u.Id)
+                RecordId: r.GetPlayerRecordId(u.Id),
+                IsMonitor: false
             )).ToList(),
-            Monitors: new List<WebSocketAdminUserInfo>() // TODO: 获取观察者详细信息
+            Monitors: r.GetMonitors().Select(m => new WebSocketAdminUserInfo(
+                Id: m.Id,
+                Name: m.Name,
+                Connected: m.IsConnected,
+                IsHost: r.IsHost(m),
+                GameTime: m.GameTime,
+                Language: null,
+                Finished: false,
+                Aborted: false,
+                RecordId: null,
+                IsMonitor: true
+            )).ToList()
         )).ToList();
 
         var changes = new WebSocketAdminChangesData(
@@ -507,7 +527,10 @@ public class WebSocketService
             Changes: changes
         );
 
-        var message = new WebSocketAdminUpdateMessage(Data: updateData);
+        var message = new WebSocketAdminUpdateMessage(
+            Type: WsMessageType.AdminUpdate,
+            Data: updateData
+        );
 
         var adminClients = _clients.Values.Where(c => c.ClientType == WebSocketClientType.AdminSubscriber).ToList();
         _logger.LogInformation($"发送管理员更新: 房间数={rooms.Count}, 管理员订阅客户端数={adminClients.Count}");

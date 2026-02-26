@@ -156,6 +156,9 @@ public class Room
     public int GetAbortedCount() => _abortedUsers.Count;
     public List<long> GetFinishedUserIds() => _playResults.Keys.Select(k => (long)k).ToList();
     public List<long> GetAbortedUserIds() => _abortedUsers.Select(k => (long)k).ToList();
+    
+    public bool IsUserReady(User user) => _readyUsers.Contains(user.Id);
+    public List<User> GetMonitors() => _monitors.ToList();
     // --- End Getters for Admin API ---
 
     public ClientRoomState GetClientState(User user)
