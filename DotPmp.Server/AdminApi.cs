@@ -25,12 +25,14 @@ public class AdminApiMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly string? _adminToken;
+    private readonly string? _viewToken;
     private readonly OtpService _otpService;
 
     public AdminApiMiddleware(RequestDelegate next, ServerConfig config, OtpService otpService)
     {
         _next = next;
         _adminToken = string.IsNullOrWhiteSpace(config.AdminToken) ? null : config.AdminToken;
+        _viewToken = string.IsNullOrWhiteSpace(config.ViewToken) ? null : config.ViewToken;
         _otpService = otpService;
     }
 
@@ -40,15 +42,45 @@ public class AdminApiMiddleware
         if (context.Request.Path.StartsWithSegments("/admin/otp")) { await _next(context); return; }
 
         var token = ExtractToken(context.Request);
-        if (!string.IsNullOrEmpty(token) && token == _adminToken) { await _next(context); return; }
-        if (!string.IsNullOrEmpty(token) && _otpService.ValidateTempToken(token, context.Connection.RemoteIpAddress)) { await _next(context); return; }
 
-        if (_adminToken is null) {
+        // 检查管理员 Token（完全权限）
+        if (!string.IsNullOrEmpty(token) && token == _adminToken)
+        {
+            await _next(context);
+            return;
+        }
+
+        // 检查临时 Token
+        if (!string.IsNullOrEmpty(token) && _otpService.ValidateTempToken(token, context.Connection.RemoteIpAddress))
+        {
+            await _next(context);
+            return;
+        }
+
+        // 检查查询 Token（只读权限）
+        if (!string.IsNullOrEmpty(token) && token == _viewToken)
+        {
+            // ViewToken 只允许 GET 请求
+            if (context.Request.Method == "GET")
+            {
+                await _next(context);
+                return;
+            }
+            else
+            {
+                context.Response.StatusCode = 403;
+                await context.Response.WriteAsJsonAsync(new { ok = false, error = "view-token-readonly" });
+                return;
+            }
+        }
+
+        if (_adminToken is null)
+        {
             context.Response.StatusCode = 403;
             await context.Response.WriteAsJsonAsync(new { ok = false, error = "admin-disabled" });
             return;
         }
-        
+
         context.Response.StatusCode = 401;
         await context.Response.WriteAsJsonAsync(new { ok = false, error = "unauthorized" });
     }

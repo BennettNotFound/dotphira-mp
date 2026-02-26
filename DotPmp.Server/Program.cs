@@ -193,6 +193,7 @@ namespace DotPmp.Server {
         public string WelcomeMessage { get; set; } = "[L]欢迎来到L的联机服务器!!!";
         public bool HttpService { get; set; } = true;
         public string? AdminToken { get; set; }
+        public string? ViewToken { get; set; }
         public string AdminDataPath { get; set; } = "admin_data.json";
     }
 }

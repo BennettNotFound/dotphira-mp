@@ -389,8 +389,44 @@
     let isAdminConnected = false;
     let adminToken = "lllllllll";
 
+    // 测试 HTTP API
+    async function testHttpApi() {
+        try {
+            console.log('测试 HTTP API...');
+            const res = await fetch('/status');
+            const data = await res.json();
+            console.log('✓ HTTP API 可用:', data);
+            document.getElementById('serverName').textContent = data.serverName;
+            document.getElementById('roomCount').textContent = data.roomCount;
+            document.getElementById('sessionCount').textContent = data.sessionCount;
+            document.getElementById('userCount').textContent = data.userCount;
+        } catch (e) {
+            console.error('✗ HTTP API 不可用:', e);
+        }
+    }
+
+    // 监控 WebSocket 连接状态
+    setInterval(() => {
+        if (ws) {
+            console.log('WebSocket 状态检查:', {
+                readyState: ws.readyState,
+                readyStateText: ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][ws.readyState],
+                url: ws.url,
+                protocol: ws.protocol
+            });
+        }
+    }, 5000);
+
     // 初始化
     function init() {
+        console.log('初始化应用...');
+        console.log('Admin Token:', adminToken);
+        console.log('当前页面 URL:', window.location.href);
+        console.log('WebSocket URL:', (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host + '/ws');
+
+        // 先测试 HTTP API 是否可用
+        testHttpApi();
+
         // 直接尝试 WebSocket 连接
         connectWebSocket();
     }
@@ -400,15 +436,19 @@
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws`;
 
+        console.log('尝试连接 WebSocket:', wsUrl);
+        console.log('Admin Token:', adminToken);
+
         try {
             ws = new WebSocket(wsUrl);
 
             ws.onopen = () => {
-                console.log('WebSocket 已连接');
+                console.log('✓ WebSocket 已连接');
                 document.getElementById('lastUpdate').textContent = '🟢 WebSocket 已连接';
 
                 // 如果有管理员 Token，使用管理员订阅获取所有房间
                 if (adminToken) {
+                    console.log('发送管理员订阅请求...');
                     subscribeAsAdmin();
                 } else {
                     // 没有管理员Token，使用HTTP轮询
@@ -418,12 +458,18 @@
             };
 
             ws.onmessage = (event) => {
-                const message = JSON.parse(event.data);
-                handleWebSocketMessage(message);
+                console.log('✓ 收到 WebSocket 消息:', event.data);
+                try {
+                    const message = JSON.parse(event.data);
+                    console.log('✓ 解析后的消息:', message);
+                    handleWebSocketMessage(message);
+                } catch (e) {
+                    console.error('解析消息失败:', e, event.data);
+                }
             };
 
             ws.onerror = (error) => {
-                console.error('WebSocket 错误:', error);
+                console.error('✗ WebSocket 错误:', error);
                 document.getElementById('lastUpdate').textContent = '🔴 连接错误 (Cloudflare?)';
 
                 // 如果是 426 错误，说明 Cloudflare 干扰了 WebSocket，自动切换到 HTTP 轮询
@@ -460,12 +506,25 @@
 
     // 管理员订阅
     function subscribeAsAdmin() {
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (!ws) {
+            console.error('WebSocket 对象不存在');
+            return;
+        }
 
-        ws.send(JSON.stringify({
-            type: 'webui',
+        if (ws.readyState !== WebSocket.OPEN) {
+            console.warn('WebSocket 未连接，当前状态:', ws.readyState, ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][ws.readyState]);
+            // 延迟 1 秒后重试
+            setTimeout(subscribeAsAdmin, 1000);
+            return;
+        }
+
+        console.log('✓ 发送管理员订阅请求，Token:', adminToken);
+        const message = JSON.stringify({
+            type: 'admin_subscribe',
             token: adminToken
-        }));
+        });
+        console.log('✓ 发送消息内容:', message);
+        ws.send(message);
     }
 
     // 处理 WebSocket 消息
@@ -501,6 +560,9 @@
 
     // 处理管理员更新
     async function handleAdminUpdate(rooms) {
+        console.log('收到管理员更新，房间数:', rooms?.length);
+        console.log('房间数据:', rooms);
+
         if (!rooms || !Array.isArray(rooms)) return;
 
         // 更新房间计数
@@ -525,6 +587,8 @@
                 isMonitor: false
             })) || []
         }));
+
+        console.log('转换后的房间数据:', formattedRooms);
 
         // 异步获取缺失的谱面和用户信息（不阻塞渲染）
         loadMissingData(formattedRooms);
