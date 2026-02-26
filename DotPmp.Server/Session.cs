@@ -128,23 +128,28 @@ public class Session
             var roomState = user.Room?.GetClientState(user);
 
             // 2. 开一个后台任务去发欢迎消息，不阻塞当前方法的返回
-            _ = Task.Run(async () => 
+            if (user.Id != 1739989)
             {
-                try
+                _ = Task.Run(async () => 
                 {
-                    // 稍微延迟一下（比如 200~500 毫秒），确保外层框架已经把 Auth 消息发给了客户端，
-                    // 且客户端已经处理完毕切入了“已登录”状态。
-                    await Task.Delay(100); 
+                    try
+                    {
+                        // 稍微延迟一下（比如 200~500 毫秒），确保外层框架已经把 Auth 消息发给了客户端，
+                        // 且客户端已经处理完毕切入了“已登录”状态。
+                        await Task.Delay(300); 
 
-                    await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, _welcomeMessage)));
-                    await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, "服务器当前为开发阶段,可能有很多小毛病")));
-                    await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, "欢迎反馈到腐竹: 2165217440")));
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Failed to send welcome message: {ex.Message}");
-                }
-            });
+                        await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, _welcomeMessage)));
+                        await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, "服务器当前为开发阶段,可能有很多小毛病")));
+                        await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, "欢迎反馈到腐竹: 2165217440")));
+                        await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, "交流群: ?")));
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Failed to send welcome message: {ex.Message}");
+                    }
+                });
+            }
+
             
             return new ServerCommand.Authenticate(
                 Result<(UserInfo, ClientRoomState?)>.Success((user.ToInfo(), roomState))
