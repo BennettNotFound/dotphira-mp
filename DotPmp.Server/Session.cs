@@ -136,7 +136,7 @@ public class Session
                     {
                         // 稍微延迟一下（比如 200~500 毫秒），确保外层框架已经把 Auth 消息发给了客户端，
                         // 且客户端已经处理完毕切入了“已登录”状态。
-                        await Task.Delay(300); 
+                        await Task.Delay(200); 
 
                         await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, _welcomeMessage)));
                         await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, "服务器当前为开发阶段,可能有很多小毛病")));
