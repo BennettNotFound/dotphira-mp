@@ -3,7 +3,7 @@ using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DotPmp.Server;
-
+using Microsoft.AspNetCore.Mvc;
 // --- 1. 配置加载 ---
 var builder = WebApplication.CreateBuilder(args);
 var config = new ServerConfig();
@@ -34,7 +34,7 @@ builder.Services.AddSingleton<WebSocketService>();
 builder.Services.AddCors();
 
 builder.Services.AddSingleton<WebSocketService>();
-
+builder.Services.AddHttpClient();
 var app = builder.Build();
 var adminDataService = app.Services.GetRequiredService<AdminDataService>();
 var webSocketService = app.Services.GetRequiredService<WebSocketService>();
@@ -156,17 +156,34 @@ if (config.HttpService)
     }));
 
     // 新规范路径 (单数 room)
-    app.MapGet("/room", (ServerState server) => {
-        var roomList = server.GetAllRooms().Select(r => new {
-            roomid = r.Id,
-            cycle = r.IsCycle,
-            @lock = r.IsLocked,
-            host = new { name = r.Host.Name, id = r.Host.Id.ToString() },
-            state = r.State.ToString().ToLower(),
-            chart = r.SelectedChartId.HasValue ? new { name = $"Chart-{r.SelectedChartId}", id = r.SelectedChartId.Value.ToString() } : null,
-            players = r.GetPlayers().Select(p => new { p.Name, id = p.Id }).ToList()
-        }).ToList();
-        return Results.Ok(new { rooms = roomList, total = roomList.Count });
+    app.MapGet("/room", async (ServerState server, [FromServices] HttpClient client) => {
+        var rooms = server.GetAllRooms();
+
+        var tasks = rooms.Select(async r => {
+            string chartName = $"Chart-{r.SelectedChartId}";
+            if (r.SelectedChartId.HasValue) {
+                try {
+                    // 直接访问 Phira API
+                    var response = await client.GetFromJsonAsync<System.Text.Json.JsonElement>($"https://api.phira.cn/chart/{r.SelectedChartId}");
+                    chartName = response.GetProperty("name").GetString() ?? chartName;
+                } catch { 
+                    // 失败保持默认名
+                }
+            }
+
+            return new {
+                roomid = r.Id,
+                cycle = r.IsCycle,
+                @lock = r.IsLocked,
+                host = new { name = r.Host.Name, id = r.Host.Id.ToString() },
+                state = r.State.ToString().ToLower(),
+                chart = r.SelectedChartId.HasValue ? new { name = chartName, id = r.SelectedChartId.Value.ToString() } : null,
+                players = r.GetPlayers().Select(p => new { p.Name, id = p.Id.ToString() }).ToList()
+            };
+        });
+
+        var roomList = await Task.WhenAll(tasks);
+        return Results.Ok(new { rooms = roomList, total = roomList.Length });
     });
 
     app.MapGet("/status", (ServerState server, ServerConfig sc) => Results.Ok(new {

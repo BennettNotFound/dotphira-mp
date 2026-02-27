@@ -39,7 +39,7 @@ public class ServerState
 
     public async Task<User> GetOrCreateUserAsync(int userId, string userName)
     {
-        if (IsUserBanned(userId)) throw new Exception("You are banned from this server.");
+        if (IsUserBanned(userId)) throw new Exception("此账号已被封禁");
         return _users.GetOrAdd(userId, _ => new User(userId, userName));
     }
 

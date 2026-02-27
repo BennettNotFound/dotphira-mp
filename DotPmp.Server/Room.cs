@@ -5,7 +5,7 @@ namespace DotPmp.Server;
 
 public class Room
 {
-        public int MaxPlayerCount { get; set; } = 8;
+        public int MaxPlayerCount { get; set; } = 32678;
     private readonly List<User> _users = new();
     private readonly List<User> _monitors = new();
     private readonly HashSet<int> _readyUsers = new();

@@ -141,7 +141,7 @@ public class Session
                         await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, _welcomeMessage)));
                         await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, "服务器当前为开发阶段,可能有很多小毛病")));
                         await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, "欢迎反馈到腐竹: 2165217440")));
-                        await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, "交流群: ?")));
+                        await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, "交流群: 1087514502")));
                     }
                     catch (Exception ex)
                     {
