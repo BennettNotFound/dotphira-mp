@@ -48,6 +48,8 @@ public static class ReplayApi
                 return Results.NotFound(new { ok = false });
 
             context.Response.ContentType = "application/octet-stream";
+            context.Response.Headers.ContentDisposition =
+                $"attachment; filename=\"{timestamp}.phirarec\"";
 
             await context.Response.SendFileAsync(filePath);
 

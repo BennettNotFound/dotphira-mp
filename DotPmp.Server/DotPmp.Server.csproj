@@ -4,9 +4,6 @@
     <ProjectReference Include="..\DotPmp.Common\DotPmp.Common.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="System.Net.Http.Json" Version="10.0.3" />
-  </ItemGroup>
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>

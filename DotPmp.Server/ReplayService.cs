@@ -1,10 +1,9 @@
 using System.Collections.Concurrent;
-using System.Net.Http.Json;
 using Microsoft.Extensions.Internal;
 
 namespace DotPmp.Server;
 
-public record ReplaySession(long UserId, DateTime ExpiresAt);
+public record ReplaySession(long UserId, DateTimeOffset ExpiresAt);
 
 public record PhiraUserInfo(int Id, string Name);
 
@@ -39,7 +38,7 @@ public class ReplayService : IDisposable
 
         var sessionToken = Guid.NewGuid().ToString();
 
-        var expiresAt = _clock.UtcNow.AddMinutes(30).DateTime;
+        var expiresAt = _clock.UtcNow.AddMinutes(30);
 
         _sessions[sessionToken] = new ReplaySession(user.Id, expiresAt);
 
@@ -76,7 +75,8 @@ public class ReplayService : IDisposable
     }
 
     public ReplaySession? GetSession(string token)
-    {
+    {   
+        Console.WriteLine($"session count: {_sessions.Count}");
         if (!_sessions.TryGetValue(token, out var session))
             return null;
 
