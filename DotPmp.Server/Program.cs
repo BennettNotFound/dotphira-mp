@@ -30,6 +30,7 @@ builder.Services.AddSingleton<Microsoft.Extensions.Internal.ISystemClock, Micros
 builder.Services.AddSingleton<OtpService>();
 builder.Services.AddSingleton<IpBlacklistService>();
 builder.Services.AddSingleton<ReplayService>();
+builder.Services.AddSingleton<ShareStationService>();
 builder.Services.AddSingleton<WebSocketService>();
 builder.Services.AddCors();
 

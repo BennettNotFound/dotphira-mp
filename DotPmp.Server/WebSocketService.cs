@@ -387,7 +387,18 @@ public class WebSocketService
     {
         var room = await _serverState.GetRoomAsync(roomId);
         if (room == null) return;
-
+        string chartName = $"Chart-{room.SelectedChartId}";
+        HttpClient c = new HttpClient();
+        if (room.SelectedChartId.HasValue) {
+            try {
+                // 直接访问 Phira API
+                var response = await c.GetFromJsonAsync<System.Text.Json.JsonElement>($"https://api.phira.cn/chart/{room.SelectedChartId}");
+                chartName = response.GetProperty("name").GetString() ?? chartName;
+            } catch
+            {
+                chartName = $"Chart-{room.SelectedChartId}";
+            }
+        }
         var roomData = new WebSocketRoomUpdateData(
             RoomId: room.Id,
             State: room.State.ToString().ToLower(),
@@ -395,7 +406,7 @@ public class WebSocketService
             Cycle: room.IsCycle,
             Live: room.IsLive,
             Chart: room.SelectedChartId.HasValue ? new WebSocketRoomChartInfo(
-                Name: $"Chart-{room.SelectedChartId}",
+                Name: chartName,
                 Id: room.SelectedChartId.Value
             ) : null,
             Host: new WebSocketRoomHostInfo(
