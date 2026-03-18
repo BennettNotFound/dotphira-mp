@@ -72,9 +72,7 @@ app.Lifetime.ApplicationStarted.Register(() =>
                         // 【核心修复】：必须等待连接关闭，否则任务结束 session 会被销毁
                         // Session 内部会通过 HeartbeatMonitor 和 NetworkStream 进行通信
                         // 我们在这里等待直到底层 Socket 断开
-                        while (client.Connected && !cancellationToken.IsCancellationRequested) {
-                            await Task.Delay(1000, cancellationToken);
-                        }
+                        await session.WaitUntilClosedAsync(cancellationToken);
                     } catch {
                         // 异常处理
                     } finally {

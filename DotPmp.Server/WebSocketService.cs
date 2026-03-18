@@ -32,6 +32,7 @@ public class WebSocketService
     private readonly OtpService _otpService;
     private readonly ILogger<WebSocketService> _logger;
     private readonly JsonSerializerOptions _jsonOptions;
+    private static readonly HttpClient HttpClient = new();
 
     public WebSocketService(ServerState serverState, ServerConfig config, OtpService otpService, ILogger<WebSocketService> logger)
     {
@@ -388,11 +389,11 @@ public class WebSocketService
         var room = await _serverState.GetRoomAsync(roomId);
         if (room == null) return;
         string chartName = $"Chart-{room.SelectedChartId}";
-        HttpClient c = new HttpClient();
+
         if (room.SelectedChartId.HasValue) {
             try {
                 // 直接访问 Phira API
-                var response = await c.GetFromJsonAsync<System.Text.Json.JsonElement>($"https://api.phira.cn/chart/{room.SelectedChartId}");
+                var response = await HttpClient.GetFromJsonAsync<System.Text.Json.JsonElement>($"https://api.phira.cn/chart/{room.SelectedChartId}");
                 chartName = response.GetProperty("name").GetString() ?? chartName;
             } catch
             {

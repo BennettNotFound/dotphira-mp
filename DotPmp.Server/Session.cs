@@ -10,6 +10,7 @@ public class Session
     private const string PhiraHost = "https://phira.5wyxi.com";
     private static readonly HttpClient HttpClient = new();
 
+    private readonly TaskCompletionSource _closedTcs = new();
     private readonly Guid _id;
     private readonly NetworkStream<ServerCommand, ClientCommand> _stream;
     private readonly ServerState _server;
@@ -543,5 +544,19 @@ public class Session
     {
         _heartbeatCts.Cancel();
         await _stream.CloseAsync();
+        _closedTcs.TrySetResult();
+    }
+
+    public async Task WaitUntilClosedAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await _closedTcs.Task.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when cancellation is requested
+            throw;
+        }
     }
 }
