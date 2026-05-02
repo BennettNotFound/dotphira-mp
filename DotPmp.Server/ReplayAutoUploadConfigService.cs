@@ -49,6 +49,7 @@ public class ReplayAutoUploadConfigService : IDisposable
         var uploadId = Guid.NewGuid();
         var userTasks = _pendingTasks.GetOrAdd(userId, _ => new ConcurrentDictionary<Guid, CancellationTokenSource>());
         userTasks[uploadId] = cts;
+        _logger.LogInformation("[AutoUpload] Scheduled for user {UserId}, replay {ReplayPath}, show={Show}", userId, replayPath, show);
 
         _ = Task.Run(async () =>
         {
@@ -63,7 +64,12 @@ public class ReplayAutoUploadConfigService : IDisposable
                 if (!File.Exists(replayPath))
                     return;
 
-                await _shareStationService.UploadReplayAsync(replayPath, userId, show, cts.Token);
+                var result = await _shareStationService.UploadReplayAsync(
+                    replayPath,
+                    userId,
+                    show: show,
+                    cancellationToken: cts.Token);
+                _logger.LogInformation("[AutoUpload] Uploaded for user {UserId}, replay {ReplayPath}, replayId={ReplayId}, show={Show}", userId, replayPath, result.ReplayId, show);
             }
             catch (OperationCanceledException)
             {

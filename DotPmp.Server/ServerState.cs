@@ -6,18 +6,20 @@ namespace DotPmp.Server;
 public class ServerState
 {
     // 功能开关
-    public bool ReplayRecordingEnabled { get; set; } = false;
+    public bool ReplayRecordingEnabled { get; set; } = true;
     public bool RoomCreationEnabled { get; set; } = true;
 
     private readonly AdminDataService _adminDataService;
+    private readonly ServerConfig _config;
     private readonly ReplayAutoUploadConfigService _replayAutoUploadConfigService;
     private readonly ConcurrentDictionary<Guid, Session> _sessions = new();
     private readonly ConcurrentDictionary<int, User> _users = new();
     private readonly ConcurrentDictionary<string, Room> _rooms = new();
     private WebSocketService? _webSocketService;
 
-    public ServerState(AdminDataService adminDataService, ReplayAutoUploadConfigService replayAutoUploadConfigService)
+    public ServerState(ServerConfig config, AdminDataService adminDataService, ReplayAutoUploadConfigService replayAutoUploadConfigService)
     {
+        _config = config;
         _adminDataService = adminDataService;
         _replayAutoUploadConfigService = replayAutoUploadConfigService;
         // 注册系统用户 "L"
@@ -118,6 +120,10 @@ public class ServerState
     public WebSocketService? GetWebSocketService() => _webSocketService;
     public ReplayAutoUploadConfig GetReplayAutoUploadConfig(long userId) => _replayAutoUploadConfigService.Get(userId);
     public void ScheduleReplayAutoUpload(string replayPath, long userId, bool show) => _replayAutoUploadConfigService.ScheduleUpload(replayPath, userId, show);
+    public string GetReplayRootPath() =>
+        Path.IsPathRooted(_config.ReplayDataPath)
+            ? _config.ReplayDataPath
+            : Path.Combine(AppContext.BaseDirectory, _config.ReplayDataPath);
 
     public async Task DisableReplayRecordingForAllRoomsAsync()
     {

@@ -1,78 +1,122 @@
+using System.Text;
 using DotPmp.Common;
+using ZstdSharp;
 
 namespace DotPmp.Server;
 
 public class ReplayWriter : IAsyncDisposable
 {
-    private readonly FileStream _fileStream;
+    private static readonly byte[] FileHeader = Encoding.ASCII.GetBytes("PHIRAREC");
+    private const int FileVersion = 1;
+    private const byte CompressionTypeZstd = 0x01;
+
     private readonly string _filePath;
+    private readonly int _chartId;
+    private readonly string _chartName;
+    private readonly int _userId;
+    private readonly string _userName;
     private readonly long _timestamp;
-    private int _recordId = 0;
-    private bool _isClosed = false;
+    private readonly List<TouchFrame> _touchFrames = new();
+    private readonly List<JudgeEvent> _judgeEvents = new();
+
+    private int _recordId;
+    private bool _isClosed;
 
     public string FilePath => _filePath;
     public long Timestamp => _timestamp;
     public int RecordId => _recordId;
 
-    public ReplayWriter(string filePath, int chartId, int userId)
+    public ReplayWriter(string filePath, int chartId, string chartName, int userId, string userName)
     {
         _filePath = filePath;
-        var directory = Path.GetDirectoryName(filePath);
-        if (directory != null && !Directory.Exists(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        _fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.Read, 4096, true);
+        _chartId = chartId;
+        _chartName = chartName;
+        _userId = userId;
+        _userName = userName;
         _timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-        // 写入 14 字节文件头 (小端序)
-        var header = new byte[14];
-        BitConverter.TryWriteBytes(header.AsSpan(0, 2), (ushort)0x504D); // "PM"
-        BitConverter.TryWriteBytes(header.AsSpan(2, 4), (uint)chartId);
-        BitConverter.TryWriteBytes(header.AsSpan(6, 4), (uint)userId);
-        BitConverter.TryWriteBytes(header.AsSpan(10, 4), (uint)0); // Record ID 初始为 0
-        
-        _fileStream.Write(header);
+        var directory = Path.GetDirectoryName(filePath);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
     }
 
-    /// <summary>
-    /// 当玩家上传成绩后，更新文件头中的 Record ID
-    /// </summary>
-    public async Task UpdateRecordIdAsync(int recordId)
+    public Task UpdateRecordIdAsync(int recordId)
     {
-        if (_isClosed) return;
-        
-        _recordId = recordId;
-        var pos = _fileStream.Position;
-        _fileStream.Seek(10, SeekOrigin.Begin);
-        
-        var buffer = new byte[4];
-        BitConverter.TryWriteBytes(buffer, (uint)recordId);
-        await _fileStream.WriteAsync(buffer);
-        
-        _fileStream.Seek(pos, SeekOrigin.Begin);
+        if (!_isClosed)
+            _recordId = recordId;
+        return Task.CompletedTask;
     }
 
-    public async Task WriteTouchesAsync(List<TouchFrame> frames)
+    public Task WriteTouchesAsync(List<TouchFrame> frames)
     {
-        if (_isClosed) return;
-        var data = MessageSerializer.SerializeTouches(frames);
-        await _fileStream.WriteAsync(data);
+        if (!_isClosed)
+            _touchFrames.AddRange(frames);
+        return Task.CompletedTask;
     }
 
-    public async Task WriteJudgesAsync(List<JudgeEvent> events)
+    public Task WriteJudgesAsync(List<JudgeEvent> events)
     {
-        if (_isClosed) return;
-        var data = MessageSerializer.SerializeJudges(events);
-        await _fileStream.WriteAsync(data);
+        if (!_isClosed)
+            _judgeEvents.AddRange(events);
+        return Task.CompletedTask;
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_isClosed) return;
+        if (_isClosed)
+            return;
+
         _isClosed = true;
-        await _fileStream.FlushAsync();
-        await _fileStream.DisposeAsync();
+
+        var writer = new DotPmp.Common.BinaryWriter();
+        foreach (var b in FileHeader)
+            writer.WriteByte(b);
+
+        writer.WriteInt32(FileVersion);
+        writer.WriteByte(CompressionTypeZstd);
+
+        var payload = new DotPmp.Common.BinaryWriter();
+        payload.WriteInt32(_recordId);
+        payload.WriteInt64(_timestamp);
+        payload.WriteInt32(_chartId);
+        payload.WriteString(_chartName);
+        payload.WriteInt32(_userId);
+        payload.WriteString(_userName);
+        WriteTouchFrames(payload, _touchFrames);
+        WriteJudgeEvents(payload, _judgeEvents);
+
+        var compressedPayload = new Compressor().Wrap(payload.ToArray());
+        foreach (var b in compressedPayload)
+            writer.WriteByte(b);
+
+        await File.WriteAllBytesAsync(_filePath, writer.ToArray());
+    }
+
+    private static void WriteTouchFrames(DotPmp.Common.BinaryWriter writer, List<TouchFrame> frames)
+    {
+        writer.WriteULeb128((ulong)frames.Count);
+        foreach (var frame in frames)
+        {
+            writer.WriteFloat(frame.Time);
+            writer.WriteULeb128((ulong)frame.Points.Count);
+            foreach (var (id, pos) in frame.Points)
+            {
+                writer.WriteSByte(id);
+                writer.WriteUInt16(BitConverter.HalfToUInt16Bits((Half)pos.X));
+                writer.WriteUInt16(BitConverter.HalfToUInt16Bits((Half)pos.Y));
+            }
+        }
+    }
+
+    private static void WriteJudgeEvents(DotPmp.Common.BinaryWriter writer, List<JudgeEvent> events)
+    {
+        writer.WriteULeb128((ulong)events.Count);
+        foreach (var evt in events)
+        {
+            writer.WriteFloat(evt.Time);
+            writer.WriteUInt32(evt.LineId);
+            writer.WriteUInt32(evt.NoteId);
+            writer.WriteByte((byte)evt.Judgement);
+        }
     }
 }

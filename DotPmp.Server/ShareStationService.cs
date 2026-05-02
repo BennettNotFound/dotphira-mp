@@ -18,7 +18,15 @@ public class ShareStationService
 
     public record UploadResult(long ReplayId);
 
-    public async Task<UploadResult> UploadReplayAsync(string path, long userId, bool show = true, CancellationToken cancellationToken = default)
+    public async Task<UploadResult> UploadReplayAsync(
+        string path,
+        long userId,
+        bool show = true,
+        string? chartName = "",
+        string? username = "",
+        string? illustration = "",
+        string? chartLink = "",
+        CancellationToken cancellationToken = default)
     {
         if (!IsConfigured)
             throw new InvalidOperationException("Share station is not configured");
@@ -31,12 +39,26 @@ public class ShareStationService
         using var fileContent = new StreamContent(stream);
         fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
         form.Add(fileContent, "file", Path.GetFileName(path));
+        form.Add(new StringContent(chartName ?? string.Empty), "chart_name");
+        form.Add(new StringContent(username ?? string.Empty), "username");
+        form.Add(new StringContent(illustration ?? string.Empty), "illustration");
+        form.Add(new StringContent(chartLink ?? string.Empty), "chart_link");
         request.Content = form;
 
         using var response = await HttpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
 
-        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var json = JsonDocument.Parse(responseBody);
+        if (json.RootElement.TryGetProperty("success", out var successElement) &&
+            successElement.ValueKind == JsonValueKind.False)
+        {
+            var message = json.RootElement.TryGetProperty("message", out var messageElement)
+                ? messageElement.ToString()
+                : "unknown share station error";
+            throw new InvalidOperationException($"Share station upload failed: {message}. Response: {responseBody}");
+        }
+
         var replayId = ReadInt64(json.RootElement, "replay_id", "replayId", "score_id", "scoreId", "id");
 
         if (show)
@@ -71,6 +93,6 @@ public class ShareStationService
             }
         }
 
-        throw new InvalidOperationException("Missing expected id field in share station response");
+        throw new InvalidOperationException($"Missing expected id field in share station response: {root}");
     }
 }

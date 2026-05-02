@@ -23,6 +23,8 @@ var envShareStationUrl = Environment.GetEnvironmentVariable("SHARE_STATION_URL")
 if (!string.IsNullOrEmpty(envShareStationUrl)) config.ShareStationUrl = envShareStationUrl;
 var envShareStationToken = Environment.GetEnvironmentVariable("SHARE_STATION_TOKEN");
 if (!string.IsNullOrEmpty(envShareStationToken)) config.ShareStationToken = envShareStationToken;
+var envReplayDataPath = Environment.GetEnvironmentVariable("REPLAY_DATA_PATH");
+if (!string.IsNullOrEmpty(envReplayDataPath)) config.ReplayDataPath = envReplayDataPath;
 
 builder.Configuration.Bind(config);
 ApplyJsonOverrides(config, Path.Combine(builder.Environment.ContentRootPath, "config.json"));
@@ -228,6 +230,8 @@ static void ApplyJsonOverrides(ServerConfig config, string path)
         config.ShareStationUrl = shareStationUrl;
     if (TryGetString(root, out var shareStationToken, "shareStationToken", "share_station_token"))
         config.ShareStationToken = shareStationToken;
+    if (TryGetString(root, out var replayDataPath, "replayDataPath", "ReplayDataPath", "replay_data_path"))
+        config.ReplayDataPath = replayDataPath!;
 
     if (TryGetObject(root, out var shareStationObject, "shareStation", "share_station"))
     {
@@ -279,5 +283,6 @@ namespace DotPmp.Server {
         public string AdminDataPath { get; set; } = "admin_data.json";
         public string? ShareStationUrl { get; set; }
         public string? ShareStationToken { get; set; }
+        public string ReplayDataPath { get; set; } = "record";
     }
 }

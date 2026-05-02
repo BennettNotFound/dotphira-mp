@@ -35,6 +35,7 @@ public class BinaryWriter
     public void WriteSByte(sbyte value) => _writer.Write(value);
     public void WriteByte(byte value) => _writer.Write(value);
     public void WriteInt32(int value) => _writer.Write(value);
+    public void WriteInt64(long value) => _writer.Write(value);
     public void WriteUInt16(ushort value) => _writer.Write(value);
     public void WriteUInt32(uint value) => _writer.Write(value);
     public void WriteFloat(float value) => _writer.Write(value);
@@ -79,6 +80,7 @@ public class BinaryReader
     public sbyte ReadSByte() => _reader.ReadSByte();
     public byte ReadByte() => _reader.ReadByte();
     public int ReadInt32() => _reader.ReadInt32();
+    public long ReadInt64() => _reader.ReadInt64();
     public ushort ReadUInt16() => _reader.ReadUInt16();
     public uint ReadUInt32() => _reader.ReadUInt32();
     public float ReadFloat() => _reader.ReadSingle();

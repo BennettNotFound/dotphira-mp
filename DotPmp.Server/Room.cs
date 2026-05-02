@@ -19,7 +19,7 @@ public class Room
     public string Id { get; }
     public User Host { get; private set; }
     public RoomState State { get; private set; } = RoomState.SelectChart;
-    public bool IsLive { get; private set; }
+    public bool IsLive { get; private set; } = true;
     private bool _isLocked;
     public bool IsLocked
     {
@@ -33,6 +33,7 @@ public class Room
     public bool IsCycle { get; set; }
     public bool IsRecruiting { get; set; } = true;
     public int? SelectedChartId { get; set; }
+    public string? SelectedChartName { get; set; }
     public bool ReplayRecordingAllowed { get; private set; }
 
     // --- Contest Mode Properties ---
@@ -57,6 +58,7 @@ public class Room
         await _lock.WaitAsync();
         try
         {
+            IsLive = true;
             if (isMonitor)
             {
                 _monitors.Add(user);
@@ -170,7 +172,7 @@ public class Room
         return new ClientRoomState(
             Id,
             State,
-            IsLive,
+            true,
             IsLocked,
             IsCycle,
             IsHost(user),
@@ -357,14 +359,30 @@ public class Room
 
     private async Task StartReplayRecordingAsync()
     {
-        if (!ReplayRecordingAllowed || SelectedChartId == null) return;
+        if (!ReplayRecordingAllowed)
+        {
+            Console.WriteLine($"[Replay] Skipped for room {Id}: replay recording disabled for this room");
+            return;
+        }
+
+        if (SelectedChartId == null)
+        {
+            Console.WriteLine($"[Replay] Skipped for room {Id}: no selected chart");
+            return;
+        }
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         foreach (var user in _users)
         {
             var fileName = $"{timestamp}.phirarec";
-            var filePath = Path.Combine(AppContext.BaseDirectory, "record", user.Id.ToString(), SelectedChartId.Value.ToString(), fileName);
-            user.CurrentReplay = new ReplayWriter(filePath, SelectedChartId.Value, user.Id);
+            var filePath = Path.Combine(_serverState.GetReplayRootPath(), user.Id.ToString(), SelectedChartId.Value.ToString(), fileName);
+            user.CurrentReplay = new ReplayWriter(
+                filePath,
+                SelectedChartId.Value,
+                SelectedChartName ?? $"Chart-{SelectedChartId.Value}",
+                user.Id,
+                user.Name);
+            Console.WriteLine($"[Replay] Started for room {Id}, user {user.Id}, chart {SelectedChartId.Value}: {filePath}");
         }
     }
 
@@ -383,6 +401,7 @@ public class Room
     public async Task DisableReplayRecordingAsync()
     {
         ReplayRecordingAllowed = false;
+        Console.WriteLine($"[Replay] Disabled for room {Id}");
         await StopReplayRecordingAsync();
     }
 
@@ -396,9 +415,11 @@ public class Room
                 continue;
 
             var replayPath = user.CurrentReplay.FilePath;
+            var recordId = user.CurrentReplay.RecordId;
             await user.CurrentReplay.DisposeAsync();
             user.CurrentReplay = null;
             completedReplays.Add((user, replayPath));
+            Console.WriteLine($"[Replay] Saved for room {Id}, user {user.Id}: {replayPath} (recordId={recordId})");
         }
 
         return completedReplays;

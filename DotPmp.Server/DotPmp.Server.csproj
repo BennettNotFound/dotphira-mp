@@ -4,6 +4,10 @@
     <ProjectReference Include="..\DotPmp.Common\DotPmp.Common.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.6" />
+  </ItemGroup>
+
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>

@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using System.Text;
 using Microsoft.Extensions.Internal;
+using ZstdSharp;
 
 namespace DotPmp.Server;
 
@@ -10,6 +12,7 @@ public class ReplayService : IDisposable
     private static readonly TimeSpan ReplayRetention = TimeSpan.FromDays(4);
 
     private readonly ISystemClock _clock;
+    private readonly ServerConfig _config;
     private readonly PhiraAuthService _phiraAuthService;
 
     private readonly ConcurrentDictionary<string, ReplaySession> _sessions = new();
@@ -17,9 +20,10 @@ public class ReplayService : IDisposable
     private readonly Timer _cleanupTimer;
     private readonly Timer _replayCleanupTimer;
 
-    public ReplayService(ISystemClock clock, PhiraAuthService phiraAuthService)
+    public ReplayService(ISystemClock clock, ServerConfig config, PhiraAuthService phiraAuthService)
     {
         _clock = clock;
+        _config = config;
         _phiraAuthService = phiraAuthService;
 
         _cleanupTimer = new Timer(_ =>
@@ -84,8 +88,7 @@ public class ReplayService : IDisposable
     public string GetReplayPath(long userId, int chartId, long timestamp)
     {
         return Path.Combine(
-            AppContext.BaseDirectory,
-            "record",
+            GetReplayRootPath(),
             userId.ToString(),
             chartId.ToString(),
             $"{timestamp}.phirarec"
@@ -94,7 +97,9 @@ public class ReplayService : IDisposable
 
     public string GetReplayRootPath()
     {
-        return Path.Combine(AppContext.BaseDirectory, "record");
+        return Path.IsPathRooted(_config.ReplayDataPath)
+            ? _config.ReplayDataPath
+            : Path.Combine(AppContext.BaseDirectory, _config.ReplayDataPath);
     }
 
     public bool IsReplayPathAllowed(string path)
@@ -110,23 +115,61 @@ public class ReplayService : IDisposable
 
         try
         {
-            using var stream = File.OpenRead(path);
-            if (stream.Length < 14)
+            var data = File.ReadAllBytes(path);
+            if (data.Length < 14)
                 return false;
 
-            var buffer = new byte[14];
-            var read = stream.Read(buffer, 0, buffer.Length);
-            if (read != buffer.Length)
-                return false;
+            if (data.Length >= 8 && Encoding.ASCII.GetString(data, 0, 8) == "PHIRAREC")
+            {
+                var reader = new DotPmp.Common.BinaryReader(data[8..]);
+                var version = reader.ReadInt32();
+                if (version == 0)
+                {
+                    var recordId = reader.ReadInt32();
+                    var chartId = reader.ReadInt32();
+                    _ = reader.ReadString();
+                    var userId = reader.ReadInt32();
+                    _ = reader.ReadString();
+                    header = new ReplayFileHeader(chartId, userId, recordId);
+                    return true;
+                }
 
-            var magic = BitConverter.ToUInt16(buffer, 0);
+                if (version == 1)
+                {
+                    var compressionType = reader.ReadByte();
+                    var payloadBytes = data.AsSpan(8 + 4 + 1).ToArray();
+                    byte[] decompressedPayload = compressionType switch
+                    {
+                        0x00 => payloadBytes,
+                        0x01 => new Decompressor().Unwrap(payloadBytes).ToArray(),
+                        _ => Array.Empty<byte>()
+                    };
+
+                    if (decompressedPayload.Length == 0)
+                        return false;
+
+                    var payloadReader = new DotPmp.Common.BinaryReader(decompressedPayload);
+                    var recordId = payloadReader.ReadInt32();
+                    _ = payloadReader.ReadInt64();
+                    var chartId = payloadReader.ReadInt32();
+                    _ = payloadReader.ReadString();
+                    var userId = payloadReader.ReadInt32();
+                    _ = payloadReader.ReadString();
+                    header = new ReplayFileHeader(chartId, userId, recordId);
+                    return true;
+                }
+
+                return false;
+            }
+
+            var magic = BitConverter.ToUInt16(data, 0);
             if (magic != 0x504D)
                 return false;
 
             header = new ReplayFileHeader(
-                (int)BitConverter.ToUInt32(buffer, 2),
-                (int)BitConverter.ToUInt32(buffer, 6),
-                (int)BitConverter.ToUInt32(buffer, 10));
+                (int)BitConverter.ToUInt32(data, 2),
+                (int)BitConverter.ToUInt32(data, 6),
+                (int)BitConverter.ToUInt32(data, 10));
             return true;
         }
         catch
@@ -137,7 +180,7 @@ public class ReplayService : IDisposable
 
     private object GetUserReplayList(long userId)
     {
-        var userPath = Path.Combine(AppContext.BaseDirectory, "record", userId.ToString());
+        var userPath = Path.Combine(GetReplayRootPath(), userId.ToString());
 
         if (!Directory.Exists(userPath))
             return new List<object>();
@@ -157,7 +200,14 @@ public class ReplayService : IDisposable
                 if (long.TryParse(name, out var ts))
                 {
                     var recordId = TryReadReplayHeader(file, out var header) ? header!.RecordId : 0;
-                    replays.Add(new { timestamp = ts, recordId });
+                    var deleteAt = DateTimeOffset.FromUnixTimeMilliseconds(ts).Add(ReplayRetention).ToUnixTimeMilliseconds();
+                    replays.Add(new
+                    {
+                        timestamp = ts,
+                        recordId,
+                        expiresAt = deleteAt,
+                        deleteAt
+                    });
                 }
             }
 

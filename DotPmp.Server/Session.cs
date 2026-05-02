@@ -181,8 +181,13 @@ public class Session
 
     private async Task<ServerCommand?> HandleTouchesAsync(ClientCommand.Touches touches)
     {
-        if (_user?.Room == null || !_user.Room.IsLive)
+        if (_user?.Room == null)
+        {
+            Console.WriteLine("[Replay] Touches skipped: user has no room");
             return null;
+        }
+
+        Console.WriteLine($"[Replay] Touches received from user {_user.Id}: frames={touches.Frames.Count}, hasReplay={_user.CurrentReplay != null}");
 
         // 更新用户游戏时间
         if (touches.Frames.Count > 0)
@@ -195,14 +200,22 @@ public class Session
         }
 
         // 广播给所有观察者
-        await _user.Room.BroadcastToMonitorsAsync(new ServerCommand.Touches(_user.Id, touches.Frames));
+        if (_user.Room.IsLive)
+        {
+            await _user.Room.BroadcastToMonitorsAsync(new ServerCommand.Touches(_user.Id, touches.Frames));
+        }
         return null;
     }
 
     private async Task<ServerCommand?> HandleJudgesAsync(ClientCommand.Judges judges)
     {
-        if (_user?.Room == null || !_user.Room.IsLive)
+        if (_user?.Room == null)
+        {
+            Console.WriteLine("[Replay] Judges skipped: user has no room");
             return null;
+        }
+
+        Console.WriteLine($"[Replay] Judges received from user {_user.Id}: events={judges.JudgeEvents.Count}, hasReplay={_user.CurrentReplay != null}");
 
         // 写入回放
         if (_user.CurrentReplay != null)
@@ -211,7 +224,10 @@ public class Session
         }
 
         // 广播给所有观察者
-        await _user.Room.BroadcastToMonitorsAsync(new ServerCommand.Judges(_user.Id, judges.JudgeEvents));
+        if (_user.Room.IsLive)
+        {
+            await _user.Room.BroadcastToMonitorsAsync(new ServerCommand.Judges(_user.Id, judges.JudgeEvents));
+        }
         return null;
     }
 
@@ -319,7 +335,7 @@ public class Session
             var response = new JoinRoomResponse(
                 room.State,
                 room.GetAllUsers().Select(u => u.ToInfo()).ToList(),
-                room.IsLive
+                true
             );
 
             // WebSocket 通知
@@ -427,6 +443,7 @@ public class Session
             }
 
             _user.Room.SelectedChartId = select.ChartId;
+            _user.Room.SelectedChartName = chartName;
             await _user.Room.SendMessageAsync(new Message.SelectChart(_user.Id, chartName, select.ChartId));
             await _user.Room.OnStateChangeAsync();
 
