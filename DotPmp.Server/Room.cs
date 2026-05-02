@@ -40,7 +40,7 @@ public class Room
     public bool IsContestMode { get; set; }
     public HashSet<long> ContestWhitelist { get; } = new();
     // --- End Contest Mode Properties ---
-
+    
     public Room(string id, User host, ServerState serverState, bool replayRecordingAllowed, WebSocketService? webSocketService = null)
     {
         Id = id;
@@ -48,7 +48,10 @@ public class Room
         _serverState = serverState;
         ReplayRecordingAllowed = replayRecordingAllowed;
         _webSocketService = webSocketService;
+
         _users.Add(host);
+
+        IsLive = true;
     }
 
     public bool IsHost(User user) => Host.Id == user.Id;
@@ -58,11 +61,11 @@ public class Room
         await _lock.WaitAsync();
         try
         {
-            IsLive = true;
+            //IsLive = true;
             if (isMonitor)
             {
                 _monitors.Add(user);
-                IsLive = true;
+                //IsLive = true;
                 return true;
             }
             else
@@ -146,10 +149,30 @@ public class Room
     {
         return _users.Concat(_monitors).ToList();
     }
+    
+    private static readonly UserInfo FakeMonitorInfo = new(
+        20419,
+        "L",
+        true
+    );
+    public List<UserInfo> GetClientUserInfosWithFakeMonitor()
+    {
+        var users = GetAllUsers()
+            .Select(u => u.ToInfo())
+            .ToList();
+
+        if (!users.Any(u => u.Id == FakeMonitorInfo.Id))
+        {
+            users.Add(FakeMonitorInfo);
+        }
+
+        return users;
+    }
 
     // HTTP API 方法
     public int GetPlayerCount() => _users.Count;
-    public int GetMonitorCount() => _monitors.Count;
+    private int _fakeMonitorCount = 0;
+    public int GetMonitorCount() => _monitors.Count + _fakeMonitorCount;
     public List<User> GetPlayers() => _users.ToList();
     
     // --- Getters for Admin API ---
@@ -167,7 +190,8 @@ public class Room
 
     public ClientRoomState GetClientState(User user)
     {
-        var users = GetAllUsers().ToDictionary(u => u.Id, u => u.ToInfo());
+        var users = GetClientUserInfosWithFakeMonitor()
+            .ToDictionary(u => u.Id, u => u);
 
         return new ClientRoomState(
             Id,
@@ -338,8 +362,8 @@ public class Room
             if (State != RoomState.WaitingForReady)
                 throw new InvalidOperationException("Room is not in waiting state");
 
-            if (!force && !GetAllUsers().All(u => _readyUsers.Contains(u.Id)))
-                throw new InvalidOperationException("Not all users are ready");
+            if (!force && !_users.All(u => _readyUsers.Contains(u.Id)))
+                throw new InvalidOperationException("Not all players are ready");
 
             State = RoomState.Playing;
             _playResults.Clear();
@@ -439,17 +463,17 @@ public class Room
 
     private async Task CheckAllReadyAsync()
     {
-        var allUsers = GetAllUsers();
-
         if (State == RoomState.WaitingForReady)
         {
-            // 在比赛模式下，我们不自动开始游戏
+            // 比赛模式下不自动开始
             if (IsContestMode)
                 return;
 
-            if (allUsers.All(u => _readyUsers.Contains(u.Id)))
+            // 只判断玩家，不判断 monitor
+            var players = _users;
+
+            if (players.Count > 0 && players.All(u => _readyUsers.Contains(u.Id)))
             {
-                // 所有人准备好，开始游戏
                 State = RoomState.Playing;
                 _playResults.Clear();
                 _playRecordIds.Clear();
@@ -463,30 +487,30 @@ public class Room
         }
         else if (State == RoomState.Playing)
         {
-            var players = _users; // 只有玩家需要完成游戏
+            // 只有玩家需要完成游戏，monitor 不参与结算
+            var players = _users;
+
             if (players.All(u => _playResults.ContainsKey(u.Id) || _abortedUsers.Contains(u.Id)))
             {
-                // 所有人完成游戏
                 var completedReplays = await StopReplayRecordingAndCollectAsync();
                 await SendMessageAsync(new Message.GameEnd());
                 ScheduleAutoUploads(completedReplays);
 
-                // 比赛模式逻辑：在结算后输出日志并解散房间
+                // 比赛模式：结算后解散房间
                 if (IsContestMode)
                 {
-                    Console.WriteLine($"[CONTEST] Room {Id} finished. Chart: {SelectedChartId}. Results: {JsonSerializer.Serialize(_playResults)}");
-                    
-                    // 必须先解除锁定，因为 DisbandRoomAsync 也会尝试获取锁(通过 OnConnectionLostAsync)
-                    // 这里的实现假设 DisbandRoomAsync 会优雅处理。
-                    // 为了简单起见，我们直接调用 ServerState 里的 Disband
-                    _ = Task.Run(() => _serverState.DisbandRoomAsync(Id,"比赛已结束"));
+                    Console.WriteLine(
+                        $"[CONTEST] Room {Id} finished. Chart: {SelectedChartId}. Results: {JsonSerializer.Serialize(_playResults)}"
+                    );
+
+                    _ = Task.Run(() => _serverState.DisbandRoomAsync(Id, "比赛已结束"));
                     return;
                 }
 
                 State = RoomState.SelectChart;
                 _readyUsers.Clear();
 
-                // 如果开启循环模式，切换房主
+                // 循环模式：切换房主
                 if (IsCycle && _users.Count > 1)
                 {
                     var currentIndex = _users.IndexOf(Host);
@@ -503,4 +527,91 @@ public class Room
             }
         }
     }
+    public async Task MarkLiveAsync()
+    {
+        if (_webSocketService != null)
+        {
+            await _webSocketService.SendRoomUpdateAsync(Id);
+        }
+    }
+    private User? _fakeMonitor;
+
+    public async Task AddFakeMonitorAsync()
+    {
+        await _lock.WaitAsync();
+
+        User fakeMonitor;
+
+        try
+        {
+            if (_fakeMonitor != null)
+                return;
+
+            fakeMonitor = new User(20419, "L")
+            {
+                Room = this,
+                IsMonitor = true
+            };
+
+            _fakeMonitor = fakeMonitor;
+            //_monitors.Add(fakeMonitor);
+
+            IsLive = true;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+
+        // 关键：通知真实客户端房间里来了一个 monitor
+        await BroadcastAsync(new ServerCommand.OnJoinRoom(fakeMonitor.ToInfo()));
+
+        // 可选：让客户端聊天/事件流也收到加入提示
+        await SendMessageAsync(new Message.JoinRoom(fakeMonitor.Id, fakeMonitor.Name));
+
+        if (_webSocketService != null)
+        {
+            await _webSocketService.SendRoomUpdateAsync(Id);
+        }
+
+        Console.WriteLine($"[Monitor] Fake monitor joined room {Id}: {fakeMonitor.Id} {fakeMonitor.Name}");
+    }
+
+    public async Task RemoveFakeMonitorAsync()
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            _fakeMonitorCount = 0;
+
+            if (_webSocketService != null)
+            {
+                await _webSocketService.SendRoomUpdateAsync(Id);
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+    
+    public User AddFakeMonitorIfMissing()
+    {
+        var existing = _monitors.FirstOrDefault(u => u.Id == 0);
+        if (existing != null)
+            return existing;
+
+        var fake = new User(20419, "L")
+        {
+            Room = this,
+            IsMonitor = true
+        };
+
+        _monitors.Add(fake);
+        IsLive = true;
+
+        return fake;
+    }
+    
+
 }

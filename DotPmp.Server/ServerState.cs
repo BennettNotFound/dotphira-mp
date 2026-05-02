@@ -23,7 +23,7 @@ public class ServerState
         _adminDataService = adminDataService;
         _replayAutoUploadConfigService = replayAutoUploadConfigService;
         // 注册系统用户 "L"
-        _users[0] = new User(0, "L");
+        _users[20419] = new User(20419, "L");
     }
 
     public void SetWebSocketService(WebSocketService webSocketService)
@@ -51,6 +51,7 @@ public class ServerState
     {
         var room = new Room(roomId, host, this, ReplayRecordingEnabled, _webSocketService);
         if (!_rooms.TryAdd(roomId, room)) throw new InvalidOperationException("Room already exists");
+        await room.AddFakeMonitorAsync();
 
         // WebSocket 通知
         _ = Task.Run(async () => {
@@ -98,8 +99,13 @@ public class ServerState
             if (session.User != null)
             {
                 var user = session.User;
-                user.Session = null;
-                if (user.Room != null) await user.Room.OnUserLeaveAsync(user);
+                // Only tear down room/session state if this disconnected session is still
+                // the active one bound to the shared User object.
+                if (ReferenceEquals(user.Session, session))
+                {
+                    user.Session = null;
+                    if (user.Room != null) await user.Room.OnUserLeaveAsync(user);
+                }
             }
             await session.CloseAsync();
         }

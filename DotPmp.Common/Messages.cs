@@ -80,7 +80,7 @@ public record ClientRoomState(
 public record JoinRoomResponse(
     RoomState State,
     List<UserInfo> Users,
-    bool Live
+    bool Live = true
 );
 
 public abstract record ServerCommand

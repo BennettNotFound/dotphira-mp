@@ -144,10 +144,10 @@ public class Session
                         // 且客户端已经处理完毕切入了“已登录”状态。
                         await Task.Delay(200); 
 
-                        await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, _welcomeMessage)));
-                        await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, "服务器当前为开发阶段,可能有很多小毛病")));
-                        await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, "欢迎反馈到腐竹: 2165217440")));
-                        await user.SendAsync(new ServerCommand.Message(new Message.Chat(0, "交流群: 1087514502")));
+                        await user.SendAsync(new ServerCommand.Message(new Message.Chat(20419, _welcomeMessage)));
+                        await user.SendAsync(new ServerCommand.Message(new Message.Chat(20419, "服务器当前为开发阶段,可能有很多小毛病")));
+                        await user.SendAsync(new ServerCommand.Message(new Message.Chat(20419, "欢迎反馈到腐竹: 2165217440")));
+                        await user.SendAsync(new ServerCommand.Message(new Message.Chat(20419, "交流群: 1087514502")));
                     }
                     catch (Exception ex)
                     {
@@ -189,21 +189,24 @@ public class Session
 
         Console.WriteLine($"[Replay] Touches received from user {_user.Id}: frames={touches.Frames.Count}, hasReplay={_user.CurrentReplay != null}");
 
+        // 没 monitor 也刷新 live / WebSocket 状态
+        //await _user.Room.MarkLiveAsync();
+
         // 更新用户游戏时间
         if (touches.Frames.Count > 0)
             _user.GameTime = touches.Frames[^1].Time;
 
-        // 写入回放
+        // 写入回放：这个不依赖 monitor
         if (_user.CurrentReplay != null)
         {
             await _user.CurrentReplay.WriteTouchesAsync(touches.Frames);
         }
 
-        // 广播给所有观察者
-        if (_user.Room.IsLive)
-        {
-            await _user.Room.BroadcastToMonitorsAsync(new ServerCommand.Touches(_user.Id, touches.Frames));
-        }
+        // 有 monitor 才转发；没 monitor 时这里不会 Sending，这是正常的
+        await _user.Room.BroadcastToMonitorsAsync(
+            new ServerCommand.Touches(_user.Id, touches.Frames)
+        );
+
         return null;
     }
 
@@ -217,72 +220,117 @@ public class Session
 
         Console.WriteLine($"[Replay] Judges received from user {_user.Id}: events={judges.JudgeEvents.Count}, hasReplay={_user.CurrentReplay != null}");
 
-        // 写入回放
+        // 没 monitor 也刷新 live / WebSocket 状态
+        //await _user.Room.MarkLiveAsync();
+
+        // 写入回放：这个不依赖 monitor
         if (_user.CurrentReplay != null)
         {
             await _user.CurrentReplay.WriteJudgesAsync(judges.JudgeEvents);
         }
 
-        // 广播给所有观察者
-        if (_user.Room.IsLive)
-        {
-            await _user.Room.BroadcastToMonitorsAsync(new ServerCommand.Judges(_user.Id, judges.JudgeEvents));
-        }
+        // 有 monitor 才转发；没 monitor 时这里不会 Sending，这是正常的
+        await _user.Room.BroadcastToMonitorsAsync(
+            new ServerCommand.Judges(_user.Id, judges.JudgeEvents)
+        );
+
         return null;
     }
 
     public string RoomId = "";
     public bool IsUseRandomRoomId = false;
     private async Task<ServerCommand> HandleCreateRoomAsync(ClientCommand.CreateRoom create)
+{
+    try
     {
-        try
+        if (!_server.RoomCreationEnabled)
         {
-            if (!_server.RoomCreationEnabled)
+            return new ServerCommand.CreateRoom(
+                Result<object?>.Failure("Room creation is currently disabled by the administrator.")
+            );
+        }
+
+        if (_user == null)
+            return new ServerCommand.CreateRoom(Result<object?>.Failure("Not authenticated"));
+
+        if (_user.Room != null)
+            return new ServerCommand.CreateRoom(Result<object?>.Failure("Already in a room"));
+
+        if (create.RoomId == "0")
+        {
+            IsUseRandomRoomId = true;
+            int code = RandomNumberGenerator.GetInt32(100000, 1000000);
+            RoomId = code.ToString();
+        }
+        else
+        {
+            RoomId = create.RoomId;
+        }
+
+        var room = await _server.CreateRoomAsync(RoomId, _user);
+        _user.Room = room;
+        _user.IsMonitor = false;
+
+        var fakeMonitor = room.AddFakeMonitorIfMissing();
+
+        await room.SendMessageAsync(new Message.CreateRoom(_user.Id));
+        await room.SendMessageAsync(new Message.Chat(20419, $"[L]当前房间ID: {RoomId}"));
+
+        // 关键：CreateRoom 响应发出后，再通知客户端有 monitor
+        _ = Task.Run(async () =>
+        {
+            try
             {
-                return new ServerCommand.CreateRoom(Result<object?>.Failure("Room creation is currently disabled by the administrator."));
-            }
+                await Task.Delay(300);
 
-            if (_user == null)
-                return new ServerCommand.CreateRoom(Result<object?>.Failure("Not authenticated"));
-
-            if (_user.Room != null)
-                return new ServerCommand.CreateRoom(Result<object?>.Failure("Already in a room"));
-
-            if (create.RoomId == "0")
-            {
-                IsUseRandomRoomId  = true;
-                int code = RandomNumberGenerator.GetInt32(100000, 1000000);
-                RoomId =  code.ToString();
-            }
-            else
-            {
-                RoomId = create.RoomId;
-            }
-
-            var room = await _server.CreateRoomAsync(RoomId, _user);
-            _user.Room = room;
-
-            await room.SendMessageAsync(new Message.CreateRoom(_user.Id));
-            // 发送欢迎消息
-            //await room.SendMessageAsync(new Message.Chat(0, _welcomeMessage));
-            await room.SendMessageAsync(new Message.Chat(0,$"[L]当前房间ID: {RoomId}"));
-
-            // WebSocket 通知
-            _ = Task.Run(async () => {
-                var wsService = _server.GetWebSocketService();
-                if (wsService != null)
+                if (_user?.Room == room)
                 {
-                    await wsService.SendRoomLogAsync(RoomId, $"{_user.Name} 创建了房间");
-                }
-            });
+                    await _user.SendAsync(new ServerCommand.OnJoinRoom(fakeMonitor.ToInfo()));
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await Task.Delay(300);
 
-            return new ServerCommand.CreateRoom(Result<object?>.Success(null));
-        }
-        catch (Exception ex)
+                            if (_user?.Room == room && _user.Session != null)
+                            {
+                                await _user.SendAsync(
+                                    new ServerCommand.OnJoinRoom(
+                                        new UserInfo(20419, "L", true)
+                                    )
+                                );
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[Monitor] notify fake monitor failed: {ex.Message}");
+                        }
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Monitor] Failed to notify fake monitor: {ex.Message}");
+            }
+        });
+
+        _ = Task.Run(async () =>
         {
-            return new ServerCommand.CreateRoom(Result<object?>.Failure(ex.Message));
-        }
+            var wsService = _server.GetWebSocketService();
+            if (wsService != null)
+            {
+                await wsService.SendRoomLogAsync(RoomId, $"{_user.Name} 创建了房间");
+                await wsService.SendRoomUpdateAsync(RoomId);
+            }
+        });
+
+        return new ServerCommand.CreateRoom(Result<object?>.Success(null));
     }
+    catch (Exception ex)
+    {
+        return new ServerCommand.CreateRoom(Result<object?>.Failure(ex.Message));
+    }
+}
 
     private async Task<ServerCommand> HandleJoinRoomAsync(ClientCommand.JoinRoom join)
     {
@@ -334,7 +382,7 @@ public class Session
 
             var response = new JoinRoomResponse(
                 room.State,
-                room.GetAllUsers().Select(u => u.ToInfo()).ToList(),
+                room.GetClientUserInfosWithFakeMonitor(),
                 true
             );
 
