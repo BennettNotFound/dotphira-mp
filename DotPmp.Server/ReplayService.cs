@@ -5,28 +5,34 @@ namespace DotPmp.Server;
 
 public record ReplaySession(long UserId, DateTimeOffset ExpiresAt);
 
-public record PhiraUserInfo(int Id, string Name);
-
 public class ReplayService : IDisposable
 {
-    private const string PhiraHost = "https://phira.5wyxi.com";
-
-    private static readonly HttpClient HttpClient = new();
+    private static readonly TimeSpan ReplayRetention = TimeSpan.FromDays(4);
 
     private readonly ISystemClock _clock;
+    private readonly PhiraAuthService _phiraAuthService;
 
     private readonly ConcurrentDictionary<string, ReplaySession> _sessions = new();
 
     private readonly Timer _cleanupTimer;
+    private readonly Timer _replayCleanupTimer;
 
-    public ReplayService(ISystemClock clock)
+    public ReplayService(ISystemClock clock, PhiraAuthService phiraAuthService)
     {
         _clock = clock;
+        _phiraAuthService = phiraAuthService;
 
         _cleanupTimer = new Timer(_ =>
         {
             CleanupSessions();
         }, null, TimeSpan.Zero, TimeSpan.FromHours(1));
+
+        var now = _clock.UtcNow;
+        var nextMidnight = new DateTimeOffset(now.Year, now.Month, now.Day, 0, 0, 0, now.Offset).AddDays(1);
+        _replayCleanupTimer = new Timer(_ =>
+        {
+            CleanupReplayFiles();
+        }, null, nextMidnight - now, TimeSpan.FromDays(1));
     }
 
     public async Task<(bool Ok, object? Data)> AuthenticateAsync(string token)
@@ -49,29 +55,15 @@ public class ReplayService : IDisposable
             ok = true,
             userId = user.Id,
             charts,
-            sessionToken
+            sessionToken,
+            expiresAt = expiresAt.ToUnixTimeMilliseconds()
         });
     }
 
     public async Task<PhiraUserInfo?> AuthenticateUserAsync(string token)
     {
-        try
-        {
-            var request = new HttpRequestMessage(HttpMethod.Get, $"{PhiraHost}/me");
-
-            request.Headers.Add("Authorization", $"Bearer {token}");
-
-            var response = await HttpClient.SendAsync(request);
-
-            if (!response.IsSuccessStatusCode)
-                return null;
-
-            return await response.Content.ReadFromJsonAsync<PhiraUserInfo>();
-        }
-        catch
-        {
-            return null;
-        }
+        var authResult = await _phiraAuthService.AuthenticateUserAsync(token);
+        return authResult?.User;
     }
 
     public ReplaySession? GetSession(string token)
@@ -100,6 +92,49 @@ public class ReplayService : IDisposable
         );
     }
 
+    public string GetReplayRootPath()
+    {
+        return Path.Combine(AppContext.BaseDirectory, "record");
+    }
+
+    public bool IsReplayPathAllowed(string path)
+    {
+        var root = Path.GetFullPath(GetReplayRootPath());
+        var target = Path.GetFullPath(path);
+        return target.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal) || target == root;
+    }
+
+    public bool TryReadReplayHeader(string path, out ReplayFileHeader? header)
+    {
+        header = null;
+
+        try
+        {
+            using var stream = File.OpenRead(path);
+            if (stream.Length < 14)
+                return false;
+
+            var buffer = new byte[14];
+            var read = stream.Read(buffer, 0, buffer.Length);
+            if (read != buffer.Length)
+                return false;
+
+            var magic = BitConverter.ToUInt16(buffer, 0);
+            if (magic != 0x504D)
+                return false;
+
+            header = new ReplayFileHeader(
+                (int)BitConverter.ToUInt32(buffer, 2),
+                (int)BitConverter.ToUInt32(buffer, 6),
+                (int)BitConverter.ToUInt32(buffer, 10));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private object GetUserReplayList(long userId)
     {
         var userPath = Path.Combine(AppContext.BaseDirectory, "record", userId.ToString());
@@ -121,7 +156,8 @@ public class ReplayService : IDisposable
 
                 if (long.TryParse(name, out var ts))
                 {
-                    replays.Add(new { timestamp = ts, recordId = 0 });
+                    var recordId = TryReadReplayHeader(file, out var header) ? header!.RecordId : 0;
+                    replays.Add(new { timestamp = ts, recordId });
                 }
             }
 
@@ -144,8 +180,37 @@ public class ReplayService : IDisposable
             _sessions.TryRemove(key, out _);
     }
 
+    private void CleanupReplayFiles()
+    {
+        var root = GetReplayRootPath();
+        if (!Directory.Exists(root))
+            return;
+
+        var cutoff = _clock.UtcNow - ReplayRetention;
+        foreach (var file in Directory.EnumerateFiles(root, "*.phirarec", SearchOption.AllDirectories))
+        {
+            var name = Path.GetFileNameWithoutExtension(file);
+            if (!long.TryParse(name, out var timestamp))
+                continue;
+
+            if (DateTimeOffset.FromUnixTimeMilliseconds(timestamp) > cutoff)
+                continue;
+
+            try
+            {
+                File.Delete(file);
+            }
+            catch
+            {
+            }
+        }
+    }
+
     public void Dispose()
     {
         _cleanupTimer.Dispose();
+        _replayCleanupTimer.Dispose();
     }
 }
+
+public record ReplayFileHeader(int ChartId, int UserId, int RecordId);

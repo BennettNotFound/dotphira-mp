@@ -10,14 +10,16 @@ public class ServerState
     public bool RoomCreationEnabled { get; set; } = true;
 
     private readonly AdminDataService _adminDataService;
+    private readonly ReplayAutoUploadConfigService _replayAutoUploadConfigService;
     private readonly ConcurrentDictionary<Guid, Session> _sessions = new();
     private readonly ConcurrentDictionary<int, User> _users = new();
     private readonly ConcurrentDictionary<string, Room> _rooms = new();
     private WebSocketService? _webSocketService;
 
-    public ServerState(AdminDataService adminDataService)
+    public ServerState(AdminDataService adminDataService, ReplayAutoUploadConfigService replayAutoUploadConfigService)
     {
         _adminDataService = adminDataService;
+        _replayAutoUploadConfigService = replayAutoUploadConfigService;
         // 注册系统用户 "L"
         _users[0] = new User(0, "L");
     }
@@ -45,7 +47,7 @@ public class ServerState
 
     public async Task<Room> CreateRoomAsync(string roomId, User host)
     {
-        var room = new Room(roomId, host, this, _webSocketService);
+        var room = new Room(roomId, host, this, ReplayRecordingEnabled, _webSocketService);
         if (!_rooms.TryAdd(roomId, room)) throw new InvalidOperationException("Room already exists");
 
         // WebSocket 通知
@@ -114,4 +116,12 @@ public class ServerState
     }
 
     public WebSocketService? GetWebSocketService() => _webSocketService;
+    public ReplayAutoUploadConfig GetReplayAutoUploadConfig(long userId) => _replayAutoUploadConfigService.Get(userId);
+    public void ScheduleReplayAutoUpload(string replayPath, long userId, bool show) => _replayAutoUploadConfigService.ScheduleUpload(replayPath, userId, show);
+
+    public async Task DisableReplayRecordingForAllRoomsAsync()
+    {
+        foreach (var room in _rooms.Values)
+            await room.DisableReplayRecordingAsync();
+    }
 }

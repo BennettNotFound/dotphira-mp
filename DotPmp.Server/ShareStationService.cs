@@ -1,18 +1,76 @@
+using System.Text.Json;
+
 namespace DotPmp.Server;
 
 public class ShareStationService
 {
-    public bool IsConfigured => true;
+    private static readonly HttpClient HttpClient = new();
+    private readonly ServerConfig _config;
 
-    public record UploadResult(long RecordId, long ScoreId);
-
-    public async Task<UploadResult> UploadReplayAsync(string path, long userId)
+    public ShareStationService(ServerConfig config)
     {
-        await Task.Delay(500);
+        _config = config;
+    }
 
-        return new UploadResult(
-            Random.Shared.NextInt64(100000, 999999),
-            Random.Shared.NextInt64(100000, 999999)
-        );
+    public bool IsConfigured =>
+        !string.IsNullOrWhiteSpace(_config.ShareStationUrl) &&
+        !string.IsNullOrWhiteSpace(_config.ShareStationToken);
+
+    public record UploadResult(long ReplayId);
+
+    public async Task<UploadResult> UploadReplayAsync(string path, long userId, bool show = true, CancellationToken cancellationToken = default)
+    {
+        if (!IsConfigured)
+            throw new InvalidOperationException("Share station is not configured");
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, BuildUri("/upload_direct"));
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _config.ShareStationToken);
+
+        using var form = new MultipartFormDataContent();
+        await using var stream = File.OpenRead(path);
+        using var fileContent = new StreamContent(stream);
+        fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+        form.Add(fileContent, "file", Path.GetFileName(path));
+        request.Content = form;
+
+        using var response = await HttpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        var replayId = ReadInt64(json.RootElement, "replay_id", "replayId", "score_id", "scoreId", "id");
+
+        if (show)
+            await SetVisibilityAsync(replayId, true, cancellationToken);
+
+        return new UploadResult(replayId);
+    }
+
+    private async Task SetVisibilityAsync(long scoreId, bool visible, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, BuildUri(visible ? $"/show/{scoreId}" : $"/hide/{scoreId}"));
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _config.ShareStationToken);
+        using var response = await HttpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    private Uri BuildUri(string relativePath)
+    {
+        return new Uri($"{_config.ShareStationUrl!.TrimEnd('/')}{relativePath}");
+    }
+
+    private static long ReadInt64(JsonElement root, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (root.TryGetProperty(name, out var value))
+            {
+                if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var number))
+                    return number;
+                if (value.ValueKind == JsonValueKind.String && long.TryParse(value.GetString(), out number))
+                    return number;
+            }
+        }
+
+        throw new InvalidOperationException("Missing expected id field in share station response");
     }
 }

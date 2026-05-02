@@ -95,6 +95,12 @@ public class NetworkStream<TSend, TReceive>
                 await stream.FlushAsync(_cts.Token);
             }
         }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+        }
+        catch (ObjectDisposedException) when (_cts.IsCancellationRequested)
+        {
+        }
         catch (Exception ex)
         {
             Console.WriteLine($"Send error: {ex.Message}");
@@ -156,6 +162,12 @@ public class NetworkStream<TSend, TReceive>
                     throw;
                 }
             }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+        }
+        catch (ObjectDisposedException) when (_cts.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {

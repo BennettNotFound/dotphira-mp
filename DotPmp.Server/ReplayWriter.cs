@@ -5,14 +5,18 @@ namespace DotPmp.Server;
 public class ReplayWriter : IAsyncDisposable
 {
     private readonly FileStream _fileStream;
+    private readonly string _filePath;
     private readonly long _timestamp;
     private int _recordId = 0;
     private bool _isClosed = false;
 
+    public string FilePath => _filePath;
     public long Timestamp => _timestamp;
+    public int RecordId => _recordId;
 
     public ReplayWriter(string filePath, int chartId, int userId)
     {
+        _filePath = filePath;
         var directory = Path.GetDirectoryName(filePath);
         if (directory != null && !Directory.Exists(directory))
         {

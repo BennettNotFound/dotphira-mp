@@ -19,8 +19,13 @@ var envAdminToken = Environment.GetEnvironmentVariable("ADMIN_TOKEN");
 if (!string.IsNullOrEmpty(envAdminToken)) config.AdminToken = envAdminToken;
 var envAdminDataPath = Environment.GetEnvironmentVariable("ADMIN_DATA_PATH") ?? Environment.GetEnvironmentVariable("PHIRA_MP_HOME");
 if (!string.IsNullOrEmpty(envAdminDataPath)) config.AdminDataPath = (Directory.Exists(envAdminDataPath) || !envAdminDataPath.EndsWith(".json")) ? Path.Combine(envAdminDataPath, "admin_data.json") : envAdminDataPath;
+var envShareStationUrl = Environment.GetEnvironmentVariable("SHARE_STATION_URL");
+if (!string.IsNullOrEmpty(envShareStationUrl)) config.ShareStationUrl = envShareStationUrl;
+var envShareStationToken = Environment.GetEnvironmentVariable("SHARE_STATION_TOKEN");
+if (!string.IsNullOrEmpty(envShareStationToken)) config.ShareStationToken = envShareStationToken;
 
 builder.Configuration.Bind(config);
+ApplyJsonOverrides(config, Path.Combine(builder.Environment.ContentRootPath, "config.json"));
 
 // --- 2. 注册服务 ---
 builder.Services.AddSingleton(config);
@@ -29,7 +34,9 @@ builder.Services.AddSingleton<AdminDataService>();
 builder.Services.AddSingleton<Microsoft.Extensions.Internal.ISystemClock, Microsoft.Extensions.Internal.SystemClock>();
 builder.Services.AddSingleton<OtpService>();
 builder.Services.AddSingleton<IpBlacklistService>();
+builder.Services.AddSingleton<PhiraAuthService>();
 builder.Services.AddSingleton<ReplayService>();
+builder.Services.AddSingleton<ReplayAutoUploadConfigService>();
 builder.Services.AddSingleton<ShareStationService>();
 builder.Services.AddSingleton<WebSocketService>();
 builder.Services.AddCors();
@@ -63,10 +70,16 @@ app.Lifetime.ApplicationStarted.Register(() =>
             while (!cancellationToken.IsCancellationRequested) {
                 var client = await listener.AcceptTcpClientAsync(cancellationToken);
                 _ = Task.Run(async () => {
-                    var sessionId = Guid.NewGuid();
+                        var sessionId = Guid.NewGuid();
                     try {
                         // 创建 Session
-                        var session = new Session(sessionId, client, serverState, serverConfig.WelcomeMessage);
+                        var session = new Session(
+                            sessionId,
+                            client,
+                            serverState,
+                            app.Services.GetRequiredService<PhiraAuthService>(),
+                            serverConfig.WelcomeMessage,
+                            TimeSpan.FromSeconds(serverConfig.GameSessionIdleTimeoutSeconds));
                         serverState.AddSession(sessionId, session);
                         
                         // 【核心修复】：必须等待连接关闭，否则任务结束 session 会被销毁
@@ -203,15 +216,68 @@ var listenUrl = $"http://0.0.0.0:{config.HttpPort}";
 app.Urls.Add(listenUrl);
 app.Run();
 
+static void ApplyJsonOverrides(ServerConfig config, string path)
+{
+    if (!File.Exists(path))
+        return;
+
+    using var document = JsonDocument.Parse(File.ReadAllText(path));
+    var root = document.RootElement;
+
+    if (TryGetString(root, out var shareStationUrl, "shareStationUrl", "share_station_url"))
+        config.ShareStationUrl = shareStationUrl;
+    if (TryGetString(root, out var shareStationToken, "shareStationToken", "share_station_token"))
+        config.ShareStationToken = shareStationToken;
+
+    if (TryGetObject(root, out var shareStationObject, "shareStation", "share_station"))
+    {
+        if (TryGetString(shareStationObject, out var nestedUrl, "url"))
+            config.ShareStationUrl = nestedUrl;
+        if (TryGetString(shareStationObject, out var nestedToken, "token"))
+            config.ShareStationToken = nestedToken;
+    }
+}
+
+static bool TryGetObject(JsonElement element, out JsonElement value, params string[] names)
+{
+    foreach (var name in names)
+    {
+        if (element.TryGetProperty(name, out value) && value.ValueKind == JsonValueKind.Object)
+            return true;
+    }
+
+    value = default;
+    return false;
+}
+
+static bool TryGetString(JsonElement element, out string? value, params string[] names)
+{
+    foreach (var name in names)
+    {
+        if (element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String)
+        {
+            value = property.GetString();
+            return !string.IsNullOrWhiteSpace(value);
+        }
+    }
+
+    value = null;
+    return false;
+}
+
 namespace DotPmp.Server {
     public class ServerConfig {
         public int GamePort { get; set; } = 12346;
         public int HttpPort { get; set; } = 12347;
+        public int GameSessionIdleTimeoutSeconds { get; set; } = 60;
+        public int AuthorizationCacheMinutes { get; set; } = 5;
         public string ServerName { get; set; } = "DotPmp Server";
         public string WelcomeMessage { get; set; } = "[L]欢迎来到L的联机服务器!!!";
         public bool HttpService { get; set; } = true;
         public string? AdminToken { get; set; }
         public string? ViewToken { get; set; }
         public string AdminDataPath { get; set; } = "admin_data.json";
+        public string? ShareStationUrl { get; set; }
+        public string? ShareStationToken { get; set; }
     }
 }

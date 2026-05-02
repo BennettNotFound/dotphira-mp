@@ -6,6 +6,7 @@ public class User
 {
     public int Id { get; }
     public string Name { get; }
+    public string? Language { get; set; }
     public Session? Session { get; set; }
     public Room? Room { get; set; }
     public ReplayWriter? CurrentReplay { get; set; }

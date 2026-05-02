@@ -105,6 +105,7 @@ public abstract record ServerCommand
     public record CancelReady(Result<object?> Result) : ServerCommand;
     public record Played(Result<object?> Result) : ServerCommand;
     public record Abort(Result<object?> Result) : ServerCommand;
+    public record RawBytes(byte[] Data) : ServerCommand;
 }
 
 public record Result<T>

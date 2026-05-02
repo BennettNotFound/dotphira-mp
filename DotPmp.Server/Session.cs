@@ -12,7 +12,9 @@ public class Session
     private readonly Guid _id;
     private readonly NetworkStream<ServerCommand, ClientCommand> _stream;
     private readonly ServerState _server;
+    private readonly PhiraAuthService _phiraAuthService;
     private readonly CancellationTokenSource _heartbeatCts;
+    private readonly TimeSpan _idleTimeout;
     private readonly string _welcomeMessage;
     private User? _user;
     private string? _token;
@@ -21,12 +23,20 @@ public class Session
     public User? User => _user;
     public byte Version => _stream.Version;
 
-    public Session(Guid id, TcpClient client, ServerState server, string welcomeMessage = "[L]欢迎来到L的联机服务器!!!")
+    public Session(
+        Guid id,
+        TcpClient client,
+        ServerState server,
+        PhiraAuthService phiraAuthService,
+        string welcomeMessage = "[L]欢迎来到L的联机服务器!!!",
+        TimeSpan? idleTimeout = null)
     {
         _id = id;
         _server = server;
+        _phiraAuthService = phiraAuthService;
         _welcomeMessage = welcomeMessage;
         _heartbeatCts = new CancellationTokenSource();
+        _idleTimeout = idleTimeout ?? TimeSpan.FromSeconds(60);
 
         _stream = new NetworkStream<ServerCommand, ClientCommand>(
             client,
@@ -48,9 +58,9 @@ public class Session
                 await Task.Delay(TimeSpan.FromSeconds(10), _heartbeatCts.Token);
 
                 var lastReceive = _stream.GetLastReceiveTime();
-                if (DateTime.UtcNow - lastReceive > TimeSpan.FromSeconds(10))
+                if (DateTime.UtcNow - lastReceive > _idleTimeout)
                 {
-                    Console.WriteLine($"Session {_id} timeout");
+                    Console.WriteLine($"Session {_id} timeout after {_idleTimeout.TotalSeconds:0}s");
                     await _server.OnConnectionLostAsync(_id);
                     break;
                 }
@@ -96,8 +106,6 @@ public class Session
         }
     }
 
-    // Phira API 响应类型
-    private record PhiraUserInfo(int Id, string Name, string Language);
     private record PhiraRecord(int Id, int Player, int Score, float Accuracy, bool FullCombo);
     private record PhiraChart(int Id, string Name);
 
@@ -106,25 +114,24 @@ public class Session
         try
         {
             _token = auth.Token;
-
-            // 调用 phira API 获取用户信息
-            var request = new HttpRequestMessage(HttpMethod.Get, $"{PhiraHost}/me");
-            request.Headers.Add("Authorization", $"Bearer {auth.Token}");
-
-            var response = await HttpClient.SendAsync(request);
-            response.EnsureSuccessStatusCode();
-
-            var phiraUser = await response.Content.ReadFromJsonAsync<PhiraUserInfo>();
-            if (phiraUser == null)
+            var authResult = await _phiraAuthService.AuthenticateUserAsync(auth.Token);
+            if (authResult == null)
                 throw new Exception("Failed to get user info");
 
-            Console.WriteLine($"User authenticated: {phiraUser.Id} - {phiraUser.Name}");
+            var phiraUser = authResult.Value.User;
+            var cacheHint = authResult.Value.FromCache ? " [cache]" : "";
+            Console.WriteLine($"User authenticated{cacheHint}: {phiraUser.Id} - {phiraUser.Name}");
 
             var user = await _server.GetOrCreateUserAsync(phiraUser.Id, phiraUser.Name);
             _user = user;
+            user.Language = phiraUser.Language;
             user.Session = this;
 
             var roomState = user.Room?.GetClientState(user);
+            //byte[] randomBuffer = new byte[2048]; 
+            //Random.Shared.NextBytes(randomBuffer); // 填充随机数
+
+            //await user.SendAsync(new ServerCommand.RawBytes(randomBuffer));
 
             // 2. 开一个后台任务去发欢迎消息，不阻塞当前方法的返回
             if (user.Id != 1739989)

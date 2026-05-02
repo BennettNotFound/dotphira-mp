@@ -5,7 +5,7 @@ namespace DotPmp.Server;
 
 public class Room
 {
-        public int MaxPlayerCount { get; set; } = 32678;
+    public int MaxPlayerCount { get; set; } = 32678;
     private readonly List<User> _users = new();
     private readonly List<User> _monitors = new();
     private readonly HashSet<int> _readyUsers = new();
@@ -33,17 +33,19 @@ public class Room
     public bool IsCycle { get; set; }
     public bool IsRecruiting { get; set; } = true;
     public int? SelectedChartId { get; set; }
+    public bool ReplayRecordingAllowed { get; private set; }
 
     // --- Contest Mode Properties ---
     public bool IsContestMode { get; set; }
     public HashSet<long> ContestWhitelist { get; } = new();
     // --- End Contest Mode Properties ---
 
-    public Room(string id, User host, ServerState serverState, WebSocketService? webSocketService = null)
+    public Room(string id, User host, ServerState serverState, bool replayRecordingAllowed, WebSocketService? webSocketService = null)
     {
         Id = id;
         Host = host;
         _serverState = serverState;
+        ReplayRecordingAllowed = replayRecordingAllowed;
         _webSocketService = webSocketService;
         _users.Add(host);
     }
@@ -355,7 +357,7 @@ public class Room
 
     private async Task StartReplayRecordingAsync()
     {
-        if (!_serverState.ReplayRecordingEnabled || SelectedChartId == null) return;
+        if (!ReplayRecordingAllowed || SelectedChartId == null) return;
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         foreach (var user in _users)
@@ -375,6 +377,42 @@ public class Room
                 await user.CurrentReplay.DisposeAsync();
                 user.CurrentReplay = null;
             }
+        }
+    }
+
+    public async Task DisableReplayRecordingAsync()
+    {
+        ReplayRecordingAllowed = false;
+        await StopReplayRecordingAsync();
+    }
+
+    private async Task<List<(User User, string ReplayPath)>> StopReplayRecordingAndCollectAsync()
+    {
+        var completedReplays = new List<(User User, string ReplayPath)>();
+
+        foreach (var user in _users)
+        {
+            if (user.CurrentReplay == null)
+                continue;
+
+            var replayPath = user.CurrentReplay.FilePath;
+            await user.CurrentReplay.DisposeAsync();
+            user.CurrentReplay = null;
+            completedReplays.Add((user, replayPath));
+        }
+
+        return completedReplays;
+    }
+
+    private void ScheduleAutoUploads(IEnumerable<(User User, string ReplayPath)> completedReplays)
+    {
+        foreach (var (user, replayPath) in completedReplays)
+        {
+            var config = _serverState.GetReplayAutoUploadConfig(user.Id);
+            if (!config.Enabled)
+                continue;
+
+            _serverState.ScheduleReplayAutoUpload(replayPath, user.Id, config.Show);
         }
     }
 
@@ -408,8 +446,9 @@ public class Room
             if (players.All(u => _playResults.ContainsKey(u.Id) || _abortedUsers.Contains(u.Id)))
             {
                 // 所有人完成游戏
-                await StopReplayRecordingAsync();
+                var completedReplays = await StopReplayRecordingAndCollectAsync();
                 await SendMessageAsync(new Message.GameEnd());
+                ScheduleAutoUploads(completedReplays);
 
                 // 比赛模式逻辑：在结算后输出日志并解散房间
                 if (IsContestMode)

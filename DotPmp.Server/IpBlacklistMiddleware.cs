@@ -21,7 +21,7 @@ public class IpBlacklistMiddleware
 
         if (remoteIp != null && _blacklistService.IsBlacklisted(remoteIp))
         {
-            _logger.LogWarning("Blocked request from blacklisted IP: {IpAddress}", remoteIp);
+            _logger.LogWarning($"Blocked request from blacklisted IP: {remoteIp}");
             context.Response.StatusCode = (int)HttpStatusCode.Forbidden;
             await context.Response.WriteAsync("Forbidden");
             return;

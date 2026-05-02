@@ -251,6 +251,15 @@ public static class MessageSerializer
                 writer.WriteByte(19);
                 WriteResult(writer, abort.Result);
                 break;
+            
+            case ServerCommand.RawBytes raw:
+                // 1. 先写一个 Type ID (假设 RawBytes 是第 20 号命令)
+                foreach (byte b in raw.Data) 
+                {
+                    writer.WriteByte(b);
+                }
+                break;
+        
         }
 
         return writer.ToArray();

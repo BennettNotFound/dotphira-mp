@@ -7,7 +7,7 @@ namespace DotPmp.Server;
 
 // --- 1. API 请求/响应模型 (全量统一定义) ---
 public record MaxUsersRequest([property: JsonPropertyName("maxUsers")] int MaxUsers);
-public record EnabledRequest([property: JsonPropertyName("enabled")] bool Enabled);
+public record EnabledRequest([property: JsonPropertyName("enabled")] bool? Enabled);
 public record BanUserRequest([property: JsonPropertyName("userId")] long UserId, [property: JsonPropertyName("banned")] bool Banned, [property: JsonPropertyName("disconnect")] bool Disconnect);
 public record OtpVerifyRequest([property: JsonPropertyName("ssid")] string Ssid, [property: JsonPropertyName("otp")] string Otp);
 public record IpRequest([property: JsonPropertyName("ip")] string Ip);
@@ -76,6 +76,13 @@ public class AdminApiMiddleware
 
         if (_adminToken is null)
         {
+            if (!string.IsNullOrEmpty(token))
+            {
+                context.Response.StatusCode = 401;
+                await context.Response.WriteAsJsonAsync(new { ok = false, error = "token-expired" });
+                return;
+            }
+
             context.Response.StatusCode = 403;
             await context.Response.WriteAsJsonAsync(new { ok = false, error = "admin-disabled" });
             return;
@@ -108,11 +115,13 @@ public static class AdminApiEndpoints
         adminGroup.MapPost("/otp/request", (OtpService otp, ServerConfig cfg, ILogger<Program> log) => {
             if (!string.IsNullOrEmpty(cfg.AdminToken)) return Results.Json(new { ok = false, error = "otp-disabled-when-token-configured" }, statusCode: 403);
             var (ssid, req) = otp.CreateOtpRequest();
-            log.LogInformation("[OTP Request] SSID: {Ssid}, OTP: {Otp}", ssid, req.Otp);
+            log.LogInformation("[OTP Request] SSID: {Ssid}, OTP: {Otp}, Expires in 5 minutes", ssid, req.Otp);
             return Results.Ok(new { ok = true, ssid, expiresIn = 300000 });
         });
 
         adminGroup.MapPost("/otp/verify", (OtpVerifyRequest body, OtpService otp, ServerConfig cfg, HttpContext http) => {
+            if (string.IsNullOrWhiteSpace(body.Ssid) || string.IsNullOrWhiteSpace(body.Otp))
+                return Results.BadRequest(new { ok = false, error = "bad-request" });
             if (!string.IsNullOrEmpty(cfg.AdminToken)) return Results.Json(new { ok = false, error = "otp-disabled-when-token-configured" }, statusCode: 403);
             var token = otp.VerifyOtp(body.Ssid, body.Otp, http.Connection.RemoteIpAddress!);
             if (token == null) return Results.Json(new { ok = false, error = "invalid-or-expired-otp" }, statusCode: 401);
@@ -123,6 +132,8 @@ public static class AdminApiEndpoints
         adminGroup.MapGet("/rooms", (ServerState server) => Results.Ok(new { ok = true, rooms = server.GetAllRooms().Select(r => new AdminRoom(r)) }));
 
         adminGroup.MapPost("/rooms/{roomId}/max_users", async (string roomId, MaxUsersRequest body, ServerState server) => {
+            if (!IsValidRoomId(roomId)) return Results.BadRequest(new { ok = false, error = "bad-room-id" });
+            if (body.MaxUsers < 1 || body.MaxUsers > 64) return Results.BadRequest(new { ok = false, error = "bad-max-users" });
             var room = await server.GetRoomAsync(roomId);
             if (room == null) return Results.NotFound(new { ok = false, error = "room-not-found" });
             room.MaxPlayerCount = body.MaxUsers;
@@ -130,12 +141,17 @@ public static class AdminApiEndpoints
         });
 
         adminGroup.MapPost("/rooms/{roomId}/disband", async (string roomId, ServerState server) => {
+            if (!IsValidRoomId(roomId)) return Results.BadRequest(new { ok = false, error = "bad-room-id" });
+            var room = await server.GetRoomAsync(roomId);
+            if (room == null) return Results.NotFound(new { ok = false, error = "room-not-found" });
             await server.DisbandRoomAsync(roomId,"管理员已强制解散该房间");
             return Results.Ok(new { ok = true, roomid = roomId });
         });
 
         adminGroup.MapPost("/rooms/{roomId}/chat", async (string roomId, MessageRequest body, ServerState server) => {
-            if (string.IsNullOrWhiteSpace(body.Message) || body.Message.Length > 200) return Results.BadRequest(new { ok = false, error = "bad-message" });
+            if (!IsValidRoomId(roomId)) return Results.BadRequest(new { ok = false, error = "bad-room-id" });
+            if (string.IsNullOrWhiteSpace(body.Message)) return Results.BadRequest(new { ok = false, error = "bad-message" });
+            if (body.Message.Length > 200) return Results.BadRequest(new { ok = false, error = "message-too-long" });
             var room = await server.GetRoomAsync(roomId);
             if (room == null) return Results.NotFound(new { ok = false, error = "room-not-found" });
             await room.SendMessageAsync(new Common.Message.Chat(0, body.Message));
@@ -144,7 +160,8 @@ public static class AdminApiEndpoints
 
         // --- 全局广播 ---
         adminGroup.MapPost("/broadcast", async (MessageRequest body, ServerState server) => {
-            if (string.IsNullOrWhiteSpace(body.Message) || body.Message.Length > 200) return Results.BadRequest(new { ok = false, error = "bad-message" });
+            if (string.IsNullOrWhiteSpace(body.Message)) return Results.BadRequest(new { ok = false, error = "bad-message" });
+            if (body.Message.Length > 200) return Results.BadRequest(new { ok = false, error = "message-too-long" });
             var rooms = server.GetAllRooms().ToList();
             var msg = new Common.Message.Chat(0, body.Message);
             foreach (var r in rooms) await r.SendMessageAsync(msg);
@@ -153,14 +170,18 @@ public static class AdminApiEndpoints
 
         // --- 功能开关 ---
         adminGroup.MapGet("/replay/config", (ServerState server) => Results.Ok(new { ok = true, enabled = server.ReplayRecordingEnabled }));
-        adminGroup.MapPost("/replay/config", (EnabledRequest body, ServerState server) => {
-            server.ReplayRecordingEnabled = body.Enabled;
+        adminGroup.MapPost("/replay/config", async (EnabledRequest body, ServerState server) => {
+            if (body.Enabled == null) return Results.BadRequest(new { ok = false, error = "bad-enabled" });
+            server.ReplayRecordingEnabled = body.Enabled.Value;
+            if (!server.ReplayRecordingEnabled)
+                await server.DisableReplayRecordingForAllRoomsAsync();
             return Results.Ok(new { ok = true, enabled = server.ReplayRecordingEnabled });
         });
 
         adminGroup.MapGet("/room-creation/config", (ServerState server) => Results.Ok(new { ok = true, enabled = server.RoomCreationEnabled }));
         adminGroup.MapPost("/room-creation/config", (EnabledRequest body, ServerState server) => {
-            server.RoomCreationEnabled = body.Enabled;
+            if (body.Enabled == null) return Results.BadRequest(new { ok = false, error = "bad-enabled" });
+            server.RoomCreationEnabled = body.Enabled.Value;
             return Results.Ok(new { ok = true, enabled = server.RoomCreationEnabled });
         });
 
@@ -209,6 +230,7 @@ public static class AdminApiEndpoints
             var user = server.GetUser(id);
             if (user == null) return Results.NotFound(new { ok = false, error = "user-not-found" });
             if (user.IsConnected) return Results.BadRequest(new { ok = false, error = "user-must-be-disconnected" });
+            if (user.Room?.State != Common.RoomState.SelectChart) return Results.BadRequest(new { ok = false, error = "source-room-must-be-in-selectchart" });
             var targetRoom = await server.GetRoomAsync(body.RoomId);
             if (targetRoom == null) return Results.NotFound(new { ok = false, error = "target-room-not-found" });
             if (targetRoom.State != Common.RoomState.SelectChart) return Results.BadRequest(new { ok = false, error = "target-room-must-be-in-selectchart" });
@@ -248,6 +270,11 @@ public static class AdminApiEndpoints
 
         return app;
     }
+
+    private static bool IsValidRoomId(string roomId)
+    {
+        return !string.IsNullOrWhiteSpace(roomId);
+    }
 }
 
 // --- 4. 内部视图模型 ---
@@ -258,6 +285,7 @@ public record AdminUser : AdminUserBase
     [JsonPropertyName("is_host")] public bool IsHost { get; init; }
     public bool Connected { get; init; }
     public float GameTime { get; init; }
+    public string? Language { get; init; }
     public bool Finished { get; init; }
     public bool Aborted { get; init; }
     [JsonPropertyName("record_id")] public int? RecordId { get; init; }
@@ -267,6 +295,7 @@ public record AdminUser : AdminUserBase
         Connected = user.IsConnected;
         IsHost = room.IsHost(user);
         GameTime = user.GameTime;
+        Language = user.Language;
         if (room.State == Common.RoomState.Playing) {
             Finished = room.IsPlayerFinished((int)user.Id);
             Aborted = room.IsPlayerAborted((int)user.Id);
@@ -284,7 +313,9 @@ public record AdminRoom
     public bool Cycle { get; }
     public AdminUserBase Host { get; }
     public object State { get; }
+    public object? Chart { get; }
     public List<AdminUser> Users { get; }
+    public List<AdminUser> Monitors { get; }
 
     public AdminRoom(Room room)
     {
@@ -294,7 +325,9 @@ public record AdminRoom
         Locked = room.IsLocked;
         Cycle = room.IsCycle;
         Host = new AdminUserBase(room.Host.Id, room.Host.Name);
+        Chart = room.SelectedChartId.HasValue ? new { id = room.SelectedChartId.Value, name = $"Chart-{room.SelectedChartId.Value}" } : null;
         Users = room.GetPlayers().Select(u => new AdminUser(u, room)).ToList();
+        Monitors = room.GetMonitors().Select(u => new AdminUser(u, room)).ToList();
         
         if (room.State == Common.RoomState.Playing) {
             State = new { 
